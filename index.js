@@ -4,15 +4,19 @@ const { google } = require('googleapis');
 const app = express();
 app.use(express.json());
 
+// ✅ DOĞRU AUTH (ENV İLE)
 const auth = new google.auth.GoogleAuth({
-  keyFile: 'service-account.json',
+  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
   scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
 });
 
 app.post('/gsc-data', async (req, res) => {
   try {
     const authClient = await auth.getClient();
-    const searchconsole = google.searchconsole({ version: 'v1', auth: authClient });
+    const searchconsole = google.searchconsole({
+      version: 'v1',
+      auth: authClient
+    });
 
     const response = await searchconsole.searchanalytics.query({
       siteUrl: req.body.siteUrl,
@@ -26,10 +30,14 @@ app.post('/gsc-data', async (req, res) => {
 
     res.json(response.data);
   } catch (error) {
+    console.error(error);
     res.status(500).send(error.toString());
   }
 });
 
-app.listen(3000, () => {
-  console.log('API çalışıyor: http://localhost:3000');
+// ✅ PORT DÜZELTME (Render için)
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`API çalışıyor: ${PORT}`);
 });
