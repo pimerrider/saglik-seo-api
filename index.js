@@ -95,14 +95,30 @@ function getGoogleAuth() {
   });
 }
 
-// Health check
-app.get('/', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     service: 'multi-site-seo-api',
-    message: 'API is running.',
     allowedDomains: getAllowedDomains(),
     time: new Date().toISOString(),
+  });
+});
+
+app.get('/routes', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'multi-site-seo-api',
+    routes: [
+      'GET /',
+      'GET /health',
+      'GET /routes',
+      'POST /gsc-data',
+      'POST /gsc-pages',
+      'POST /gsc-query-pages',
+      'POST /sitemap-urls',
+      'POST /internal-links'
+    ],
+    time: new Date().toISOString()
   });
 });
 
