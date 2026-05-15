@@ -23,6 +23,15 @@ const DEFAULT_ALLOWED_DOMAINS = [
   'saglikliturkiye.net'
 ];
 
+function normalizeDomain(domain = '') {
+  return String(domain)
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '');
+}
+
 function getAllowedDomains() {
   const envDomains = process.env.ALLOWED_DOMAINS;
 
@@ -34,15 +43,6 @@ function getAllowedDomains() {
     .split(',')
     .map(domain => normalizeDomain(domain))
     .filter(Boolean);
-}
-
-function normalizeDomain(domain = '') {
-  return String(domain)
-    .toLowerCase()
-    .trim()
-    .replace(/^https?:\/\//, '')
-    .replace(/^www\./, '')
-    .replace(/\/.*$/, '');
 }
 
 function getDomainFromUrl(input = '') {
@@ -95,6 +95,18 @@ function getGoogleAuth() {
   });
 }
 
+// ---------- Health & Routes ----------
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'multi-site-seo-api',
+    message: 'API is running.',
+    allowedDomains: getAllowedDomains(),
+    time: new Date().toISOString(),
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -116,22 +128,15 @@ app.get('/routes', (req, res) => {
       'POST /gsc-pages',
       'POST /gsc-query-pages',
       'POST /sitemap-urls',
-      'POST /internal-links'
+      'POST /internal-links',
+      'POST /get-internal-links'
     ],
     time: new Date().toISOString()
   });
 });
 
-app.get('/health', (req, res) => {
-  res.json({
-    status: 'ok',
-    service: 'multi-site-seo-api',
-    allowedDomains: getAllowedDomains(),
-    time: new Date().toISOString(),
-  });
-});
+// ---------- GSC Endpoints ----------
 
-// GSC query data
 app.post('/gsc-data', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, dimensions, rowLimit } = req.body;
@@ -171,7 +176,6 @@ app.post('/gsc-data', async (req, res) => {
   }
 });
 
-// GSC page-based data
 app.post('/gsc-pages', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, rowLimit } = req.body;
@@ -211,7 +215,6 @@ app.post('/gsc-pages', async (req, res) => {
   }
 });
 
-// GSC query + page combined data
 app.post('/gsc-query-pages', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, rowLimit } = req.body;
@@ -331,7 +334,6 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
 
   let urls = [];
 
-  // Sitemap index
   if (parsed.sitemapindex && parsed.sitemapindex.sitemap) {
     const sitemaps = toArray(parsed.sitemapindex.sitemap);
 
@@ -355,7 +357,6 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
     }
   }
 
-  // Normal urlset
   if (parsed.urlset && parsed.urlset.url) {
     const urlEntries = toArray(parsed.urlset.url);
 
@@ -399,9 +400,38 @@ async function getCachedSitemapUrls(sitemapUrl, maxUrls = 5000) {
   return urls;
 }
 
-// This function only extracts words from the given topic.
-// It does NOT create fake links.
-// It does NOT replace sitemap data.
+// ---------- Sitemap Endpoint ----------
+
+app.post('/sitemap-urls', async (req, res) => {
+  try {
+    const { sitemapUrl, maxUrls } = req.body;
+
+    if (!sitemapUrl) {
+      return res.status(400).json({
+        error: 'sitemapUrl is required. No default sitemap is used for multi-site safety.',
+      });
+    }
+
+    requireAllowedDomain(sitemapUrl, 'sitemapUrl');
+
+    const urls = await getCachedSitemapUrls(sitemapUrl, maxUrls || 5000);
+
+    res.json({
+      sitemapUrl,
+      allowedDomain: getDomainFromUrl(sitemapUrl),
+      count: urls.length,
+      urls,
+    });
+  } catch (error) {
+    console.error('SITEMAP URLS ERROR:', error);
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
+
+// ---------- Internal Link Helpers ----------
+
 function expandTopicTokens(topic) {
   const normalized = normalizeText(topic);
 
@@ -462,7 +492,6 @@ function scoreInternalLink(item, topic, currentUrl = '') {
   let score = 0;
   const reasons = [];
 
-  // Exclude current URL
   if (currentUrl && normalizeText(item.url) === normalizeText(currentUrl)) {
     return {
       score: -999,
@@ -470,7 +499,6 @@ function scoreInternalLink(item, topic, currentUrl = '') {
     };
   }
 
-  // Avoid low-value technical URLs
   if (isLowValueUrl(searchable)) {
     return {
       score: -999,
@@ -478,7 +506,6 @@ function scoreInternalLink(item, topic, currentUrl = '') {
     };
   }
 
-  // Match only real sitemap URLs by topic tokens
   for (const token of tokens) {
     if (searchable.includes(token)) {
       score += 10;
@@ -486,7 +513,6 @@ function scoreInternalLink(item, topic, currentUrl = '') {
     }
   }
 
-  // Small priority for possible hub/category pages only if they already match topic
   const isPossibleHub =
     searchable.includes('/desserts') ||
     searchable.includes('/soups') ||
@@ -508,39 +534,9 @@ function scoreInternalLink(item, topic, currentUrl = '') {
   };
 }
 
-// Live sitemap URL endpoint
-// sitemapUrl is REQUIRED for multi-site safety.
-app.post('/sitemap-urls', async (req, res) => {
-  try {
-    const { sitemapUrl, maxUrls } = req.body;
+// ---------- Internal Link Endpoints ----------
 
-    if (!sitemapUrl) {
-      return res.status(400).json({
-        error: 'sitemapUrl is required. No default sitemap is used for multi-site safety.',
-      });
-    }
-
-    requireAllowedDomain(sitemapUrl, 'sitemapUrl');
-
-    const urls = await getCachedSitemapUrls(sitemapUrl, maxUrls || 5000);
-
-    res.json({
-      sitemapUrl,
-      allowedDomain: getDomainFromUrl(sitemapUrl),
-      count: urls.length,
-      urls,
-    });
-  } catch (error) {
-    console.error('SITEMAP URLS ERROR:', error);
-    res.status(500).json({
-      error: error.toString(),
-    });
-  }
-});
-
-// Internal link suggestion endpoint
-// sitemapUrl is REQUIRED for multi-site safety.
-app.post('/internal-links', async (req, res) => {
+async function handleInternalLinks(req, res) {
   try {
     const {
       topic,
@@ -601,9 +597,13 @@ app.post('/internal-links', async (req, res) => {
       error: error.toString(),
     });
   }
-});
+}
 
-// Render PORT
+app.post('/internal-links', handleInternalLinks);
+app.post('/get-internal-links', handleInternalLinks);
+
+// ---------- Render PORT ----------
+
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
