@@ -6,9 +6,78 @@ const { parseStringPromise } = require('xml2js');
 const app = express();
 app.use(express.json());
 
-const DEFAULT_SITEMAP_URL = 'https://turkishdishes.net/sitemap_index.xml';
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const sitemapCache = new Map();
+
+/**
+ * Allowed domains:
+ * Default:
+ * - turkishdishes.net
+ * - saglikliturkiye.net
+ *
+ * Future sites can be added from Render ENV:
+ * ALLOWED_DOMAINS=turkishdishes.net,saglikliturkiye.net,newsite.com
+ */
+const DEFAULT_ALLOWED_DOMAINS = [
+  'turkishdishes.net',
+  'saglikliturkiye.net'
+];
+
+function getAllowedDomains() {
+  const envDomains = process.env.ALLOWED_DOMAINS;
+
+  if (!envDomains) {
+    return DEFAULT_ALLOWED_DOMAINS;
+  }
+
+  return envDomains
+    .split(',')
+    .map(domain => normalizeDomain(domain))
+    .filter(Boolean);
+}
+
+function normalizeDomain(domain = '') {
+  return String(domain)
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/\/.*$/, '');
+}
+
+function getDomainFromUrl(input = '') {
+  const value = String(input).trim();
+
+  if (value.startsWith('sc-domain:')) {
+    return normalizeDomain(value.replace('sc-domain:', ''));
+  }
+
+  try {
+    const parsed = new URL(value);
+    return normalizeDomain(parsed.hostname);
+  } catch {
+    return '';
+  }
+}
+
+function isAllowedDomain(input = '') {
+  const domain = getDomainFromUrl(input);
+  const allowedDomains = getAllowedDomains();
+
+  return allowedDomains.includes(domain);
+}
+
+function requireAllowedDomain(input, fieldName = 'url') {
+  if (!input) {
+    throw new Error(`${fieldName} is required.`);
+  }
+
+  if (!isAllowedDomain(input)) {
+    throw new Error(
+      `${fieldName} domain is not allowed. Allowed domains: ${getAllowedDomains().join(', ')}`
+    );
+  }
+}
 
 /**
  * Google Auth is created lazily.
@@ -30,8 +99,9 @@ function getGoogleAuth() {
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'turkishdishes-seo-api',
+    service: 'multi-site-seo-api',
     message: 'API is running.',
+    allowedDomains: getAllowedDomains(),
     time: new Date().toISOString(),
   });
 });
@@ -39,12 +109,13 @@ app.get('/', (req, res) => {
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    service: 'turkishdishes-seo-api',
+    service: 'multi-site-seo-api',
+    allowedDomains: getAllowedDomains(),
     time: new Date().toISOString(),
   });
 });
 
-// Existing GSC endpoint - backward compatible
+// GSC query data
 app.post('/gsc-data', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, dimensions, rowLimit } = req.body;
@@ -54,6 +125,8 @@ app.post('/gsc-data', async (req, res) => {
         error: 'siteUrl, startDate and endDate are required.',
       });
     }
+
+    requireAllowedDomain(siteUrl, 'siteUrl');
 
     const auth = getGoogleAuth();
     const authClient = await auth.getClient();
@@ -93,6 +166,8 @@ app.post('/gsc-pages', async (req, res) => {
       });
     }
 
+    requireAllowedDomain(siteUrl, 'siteUrl');
+
     const auth = getGoogleAuth();
     const authClient = await auth.getClient();
 
@@ -130,6 +205,8 @@ app.post('/gsc-query-pages', async (req, res) => {
         error: 'siteUrl, startDate and endDate are required.',
       });
     }
+
+    requireAllowedDomain(siteUrl, 'siteUrl');
 
     const auth = getGoogleAuth();
     const authClient = await auth.getClient();
@@ -210,10 +287,12 @@ function guessUrlType(url) {
 }
 
 async function fetchXml(url) {
+  requireAllowedDomain(url, 'sitemapUrl');
+
   const response = await axios.get(url, {
     timeout: 15000,
     headers: {
-      'User-Agent': 'TurkishDishesSEOAPI/1.1',
+      'User-Agent': 'MultiSiteSEOAPI/1.2',
       Accept: 'application/xml,text/xml,*/*',
     },
   });
@@ -222,6 +301,8 @@ async function fetchXml(url) {
 }
 
 async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
+  requireAllowedDomain(sitemapUrl, 'sitemapUrl');
+
   if (visited.has(sitemapUrl)) return [];
   visited.add(sitemapUrl);
 
@@ -244,6 +325,10 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
       const childSitemapUrl = sitemap.loc;
       if (!childSitemapUrl) continue;
 
+      if (!isAllowedDomain(childSitemapUrl)) {
+        continue;
+      }
+
       const childUrls = await parseSitemap(
         childSitemapUrl,
         visited,
@@ -262,6 +347,10 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
       if (urls.length >= maxUrls) break;
       if (!item.loc) continue;
 
+      if (!isAllowedDomain(item.loc)) {
+        continue;
+      }
+
       urls.push({
         url: item.loc,
         lastmod: item.lastmod || null,
@@ -275,6 +364,8 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
 }
 
 async function getCachedSitemapUrls(sitemapUrl, maxUrls = 5000) {
+  requireAllowedDomain(sitemapUrl, 'sitemapUrl');
+
   const cacheKey = `${sitemapUrl}:${maxUrls}`;
   const cached = sitemapCache.get(cacheKey);
 
@@ -299,35 +390,34 @@ function expandTopicTokens(topic) {
   const normalized = normalizeText(topic);
 
   const stopwords = new Set([
-  'recipe',
-  'authentic',
-  'traditional',
-  'turkish',
-  'easy',
-  'homemade',
-  'how',
-  'make',
-  'with',
-  'and',
-  'the',
-  'for',
-  'from',
-  'dish',
-  'food',
-  'tarifi',
-  'yemek',
-  'yemegi',
-  'yemeği',
-  'lezzetli',
-  'kolay',
-  'ev',
-  'usulu',
-  'usulü',
-  'nasil',
-  'nasıl',
-  'yapilir',
-  'yapılır'
-]);
+    'recipe',
+    'authentic',
+    'traditional',
+    'turkish',
+    'easy',
+    'homemade',
+    'how',
+    'make',
+    'with',
+    'and',
+    'the',
+    'for',
+    'from',
+    'tarifi',
+    'yemek',
+    'yemegi',
+    'dish',
+    'food'
+    'health',
+'medical',
+'symptoms',
+'treatment',
+'nedir',
+'neden',
+'nasil',
+'belirti',
+'tedavi
+  ]);
 
   const tokens = normalized
     .split(/[^a-z0-9]+/i)
@@ -387,7 +477,9 @@ function scoreInternalLink(item, topic, currentUrl = '') {
     searchable.includes('/kebab') ||
     searchable.includes('/breakfast') ||
     searchable.includes('/dinner') ||
-    searchable.includes('/turkish');
+    searchable.includes('/turkish') ||
+    searchable.includes('/health') ||
+    searchable.includes('/category');
 
   if (isPossibleHub && score > 0) {
     score += 2;
@@ -401,15 +493,24 @@ function scoreInternalLink(item, topic, currentUrl = '') {
 }
 
 // Live sitemap URL endpoint
+// sitemapUrl is REQUIRED for multi-site safety.
 app.post('/sitemap-urls', async (req, res) => {
   try {
-    const sitemapUrl = req.body.sitemapUrl || DEFAULT_SITEMAP_URL;
-    const maxUrls = req.body.maxUrls || 5000;
+    const { sitemapUrl, maxUrls } = req.body;
 
-    const urls = await getCachedSitemapUrls(sitemapUrl, maxUrls);
+    if (!sitemapUrl) {
+      return res.status(400).json({
+        error: 'sitemapUrl is required. No default sitemap is used for multi-site safety.',
+      });
+    }
+
+    requireAllowedDomain(sitemapUrl, 'sitemapUrl');
+
+    const urls = await getCachedSitemapUrls(sitemapUrl, maxUrls || 5000);
 
     res.json({
       sitemapUrl,
+      allowedDomain: getDomainFromUrl(sitemapUrl),
       count: urls.length,
       urls,
     });
@@ -422,12 +523,13 @@ app.post('/sitemap-urls', async (req, res) => {
 });
 
 // Internal link suggestion endpoint
+// sitemapUrl is REQUIRED for multi-site safety.
 app.post('/internal-links', async (req, res) => {
   try {
     const {
       topic,
       currentUrl,
-      sitemapUrl = DEFAULT_SITEMAP_URL,
+      sitemapUrl,
       limit = 8,
       maxUrls = 5000,
     } = req.body;
@@ -436,6 +538,18 @@ app.post('/internal-links', async (req, res) => {
       return res.status(400).json({
         error: 'topic is required.',
       });
+    }
+
+    if (!sitemapUrl) {
+      return res.status(400).json({
+        error: 'sitemapUrl is required. No default sitemap is used for multi-site safety.',
+      });
+    }
+
+    requireAllowedDomain(sitemapUrl, 'sitemapUrl');
+
+    if (currentUrl) {
+      requireAllowedDomain(currentUrl, 'currentUrl');
     }
 
     const urls = await getCachedSitemapUrls(sitemapUrl, maxUrls);
@@ -461,6 +575,7 @@ app.post('/internal-links', async (req, res) => {
     res.json({
       topic,
       sitemapUrl,
+      allowedDomain: getDomainFromUrl(sitemapUrl),
       count: suggestions.length,
       suggestions,
     });
