@@ -10,13 +10,32 @@ const DEFAULT_SITEMAP_URL = 'https://turkishdishes.net/sitemap_index.xml';
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const sitemapCache = new Map();
 
-// ✅ Google Search Console Auth
-const auth = new google.auth.GoogleAuth({
-  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-  scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+/**
+ * Google Auth is created lazily.
+ * This prevents sitemap/internal-link endpoints from failing
+ * if GOOGLE_CREDENTIALS has an issue.
+ */
+function getGoogleAuth() {
+  if (!process.env.GOOGLE_CREDENTIALS) {
+    throw new Error('GOOGLE_CREDENTIALS environment variable is missing.');
+  }
+
+  return new google.auth.GoogleAuth({
+    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+    scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+  });
+}
+
+// Health check
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'turkishdishes-seo-api',
+    message: 'API is running.',
+    time: new Date().toISOString(),
+  });
 });
 
-// ✅ Health check
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
@@ -25,7 +44,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ✅ Existing GSC endpoint - improved but backward compatible
+// Existing GSC endpoint - backward compatible
 app.post('/gsc-data', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, dimensions, rowLimit } = req.body;
@@ -36,6 +55,7 @@ app.post('/gsc-data', async (req, res) => {
       });
     }
 
+    const auth = getGoogleAuth();
     const authClient = await auth.getClient();
 
     const searchconsole = google.searchconsole({
@@ -62,7 +82,7 @@ app.post('/gsc-data', async (req, res) => {
   }
 });
 
-// ✅ Page-based GSC endpoint
+// GSC page-based data
 app.post('/gsc-pages', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, rowLimit } = req.body;
@@ -73,6 +93,7 @@ app.post('/gsc-pages', async (req, res) => {
       });
     }
 
+    const auth = getGoogleAuth();
     const authClient = await auth.getClient();
 
     const searchconsole = google.searchconsole({
@@ -99,7 +120,7 @@ app.post('/gsc-pages', async (req, res) => {
   }
 });
 
-// ✅ Query + page combined GSC endpoint
+// GSC query + page combined data
 app.post('/gsc-query-pages', async (req, res) => {
   try {
     const { siteUrl, startDate, endDate, rowLimit } = req.body;
@@ -110,6 +131,7 @@ app.post('/gsc-query-pages', async (req, res) => {
       });
     }
 
+    const auth = getGoogleAuth();
     const authClient = await auth.getClient();
 
     const searchconsole = google.searchconsole({
@@ -147,7 +169,6 @@ function normalizeText(text = '') {
   return String(text)
     .toLowerCase()
     .replace(/ı/g, 'i')
-    .replace(/İ/g, 'i')
     .replace(/ğ/g, 'g')
     .replace(/ü/g, 'u')
     .replace(/ş/g, 's')
@@ -160,7 +181,8 @@ function normalizeText(text = '') {
 function slugToTitle(url) {
   try {
     const pathname = new URL(url).pathname;
-    const slug = pathname.replace(/^\/|\/$/g, '').split('/').pop() || '';
+    const cleanPath = pathname.replace(/^\/|\/$/g, '');
+    const slug = cleanPath.split('/').pop() || '';
 
     if (!slug) return 'Homepage';
 
@@ -174,12 +196,25 @@ function slugToTitle(url) {
   }
 }
 
+function guessUrlType(url) {
+  const normalized = normalizeText(url);
+
+  if (normalized.includes('/category/')) return 'category';
+  if (normalized.includes('/tag/')) return 'tag';
+  if (normalized.includes('/author/')) return 'author';
+  if (normalized.includes('/page/')) return 'page';
+  if (normalized.includes('/wp-')) return 'technical';
+  if (normalized.includes('/feed')) return 'feed';
+
+  return 'post_or_page';
+}
+
 async function fetchXml(url) {
   const response = await axios.get(url, {
     timeout: 15000,
     headers: {
-      'User-Agent': 'TurkishDishesSEOAPI/1.0',
-      'Accept': 'application/xml,text/xml,*/*',
+      'User-Agent': 'TurkishDishesSEOAPI/1.1',
+      Accept: 'application/xml,text/xml,*/*',
     },
   });
 
@@ -191,6 +226,7 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
   visited.add(sitemapUrl);
 
   const xml = await fetchXml(sitemapUrl);
+
   const parsed = await parseStringPromise(xml, {
     explicitArray: false,
     trim: true,
@@ -208,24 +244,29 @@ async function parseSitemap(sitemapUrl, visited = new Set(), maxUrls = 5000) {
       const childSitemapUrl = sitemap.loc;
       if (!childSitemapUrl) continue;
 
-      const childUrls = await parseSitemap(childSitemapUrl, visited, maxUrls - urls.length);
+      const childUrls = await parseSitemap(
+        childSitemapUrl,
+        visited,
+        maxUrls - urls.length
+      );
+
       urls = urls.concat(childUrls);
     }
   }
 
-  // URL set
+  // Normal urlset
   if (parsed.urlset && parsed.urlset.url) {
     const urlEntries = toArray(parsed.urlset.url);
 
     for (const item of urlEntries) {
       if (urls.length >= maxUrls) break;
-
       if (!item.loc) continue;
 
       urls.push({
         url: item.loc,
         lastmod: item.lastmod || null,
         titleFromSlug: slugToTitle(item.loc),
+        type: guessUrlType(item.loc),
       });
     }
   }
@@ -251,6 +292,9 @@ async function getCachedSitemapUrls(sitemapUrl, maxUrls = 5000) {
   return urls;
 }
 
+// This function only extracts words from the given topic.
+// It does NOT create fake links.
+// It does NOT replace sitemap data.
 function expandTopicTokens(topic) {
   const normalized = normalizeText(topic);
 
@@ -262,114 +306,37 @@ function expandTopicTokens(topic) {
     'easy',
     'homemade',
     'how',
-    'to',
     'make',
     'with',
     'and',
     'the',
-    'a',
-    'an',
+    'for',
+    'from',
     'tarifi',
     'yemek',
     'yemegi',
+    'dish',
+    'food'
   ]);
 
-  let tokens = normalized
+  const tokens = normalized
     .split(/[^a-z0-9]+/i)
     .map(t => t.trim())
     .filter(t => t.length >= 3 && !stopwords.has(t));
 
-  const add = extra => {
-    for (const item of extra) {
-      if (!tokens.includes(item)) tokens.push(item);
-    }
-  };
+  return [...new Set(tokens)];
+}
 
-  // Dessert cluster
-  if (
-    normalized.includes('kunefe') ||
-    normalized.includes('kadayif') ||
-    normalized.includes('baklava') ||
-    normalized.includes('sekerpare') ||
-    normalized.includes('sutlac') ||
-    normalized.includes('dessert')
-  ) {
-    add([
-      'dessert',
-      'desserts',
-      'baklava',
-      'sekerpare',
-      'sutlac',
-      'pudding',
-      'kadayif',
-      'syrup',
-      'sweet',
-    ]);
-  }
-
-  // Kebab / lamb cluster
-  if (
-    normalized.includes('kebab') ||
-    normalized.includes('kebabi') ||
-    normalized.includes('lamb') ||
-    normalized.includes('cag') ||
-    normalized.includes('doner') ||
-    normalized.includes('adana') ||
-    normalized.includes('tandir')
-  ) {
-    add([
-      'kebab',
-      'kebabi',
-      'lamb',
-      'doner',
-      'adana',
-      'beyti',
-      'tandir',
-      'cokertme',
-      'grill',
-    ]);
-  }
-
-  // Soup cluster
-  if (
-    normalized.includes('soup') ||
-    normalized.includes('corba') ||
-    normalized.includes('beyran') ||
-    normalized.includes('iskembe') ||
-    normalized.includes('lentil') ||
-    normalized.includes('tarhana')
-  ) {
-    add([
-      'soup',
-      'soups',
-      'corba',
-      'lentil',
-      'beyran',
-      'iskembe',
-      'tarhana',
-      'broth',
-    ]);
-  }
-
-  // Bread / pastry cluster
-  if (
-    normalized.includes('bread') ||
-    normalized.includes('lavash') ||
-    normalized.includes('lahmacun') ||
-    normalized.includes('pide') ||
-    normalized.includes('simit')
-  ) {
-    add([
-      'bread',
-      'lavash',
-      'lahmacun',
-      'pide',
-      'simit',
-      'flatbread',
-    ]);
-  }
-
-  return tokens;
+function isLowValueUrl(searchable) {
+  return (
+    searchable.includes('/wp-') ||
+    searchable.includes('/feed') ||
+    searchable.includes('/tag/') ||
+    searchable.includes('/author/') ||
+    searchable.includes('/attachment/') ||
+    searchable.includes('?') ||
+    searchable.includes('#')
+  );
 }
 
 function scoreInternalLink(item, topic, currentUrl = '') {
@@ -379,6 +346,7 @@ function scoreInternalLink(item, topic, currentUrl = '') {
   let score = 0;
   const reasons = [];
 
+  // Exclude current URL
   if (currentUrl && normalizeText(item.url) === normalizeText(currentUrl)) {
     return {
       score: -999,
@@ -386,47 +354,34 @@ function scoreInternalLink(item, topic, currentUrl = '') {
     };
   }
 
+  // Avoid low-value technical URLs
+  if (isLowValueUrl(searchable)) {
+    return {
+      score: -999,
+      reasons: ['Low-value URL type excluded'],
+    };
+  }
+
+  // Match only real sitemap URLs by topic tokens
   for (const token of tokens) {
     if (searchable.includes(token)) {
-      score += 5;
+      score += 10;
       reasons.push(`Matches topic/entity: ${token}`);
     }
   }
 
-  // Prefer hubs and category-like pages
-  if (
+  // Small priority for possible hub/category pages only if they already match topic
+  const isPossibleHub =
     searchable.includes('/desserts') ||
     searchable.includes('/soups') ||
     searchable.includes('/kebab') ||
-    searchable.includes('/turkish-soup-recipes') ||
-    searchable.includes('/turkish-dinner')
-  ) {
-    score += 4;
-    reasons.push('Possible hub/category page');
-  }
+    searchable.includes('/breakfast') ||
+    searchable.includes('/dinner') ||
+    searchable.includes('/turkish');
 
-  // Prefer recipe URLs over technical pages
-  if (
-    searchable.includes('recipe') ||
-    searchable.includes('tarif') ||
-    searchable.includes('kebab') ||
-    searchable.includes('soup') ||
-    searchable.includes('dessert')
-  ) {
+  if (isPossibleHub && score > 0) {
     score += 2;
-    reasons.push('Likely recipe-related page');
-  }
-
-  // Avoid low-value technical URLs
-  if (
-    searchable.includes('/wp-') ||
-    searchable.includes('/feed') ||
-    searchable.includes('/tag/') ||
-    searchable.includes('/author/') ||
-    searchable.includes('/attachment/')
-  ) {
-    score -= 20;
-    reasons.push('Low-value URL type');
+    reasons.push('Possible related hub/category page');
   }
 
   return {
@@ -435,7 +390,7 @@ function scoreInternalLink(item, topic, currentUrl = '') {
   };
 }
 
-// ✅ Live sitemap URL endpoint
+// Live sitemap URL endpoint
 app.post('/sitemap-urls', async (req, res) => {
   try {
     const sitemapUrl = req.body.sitemapUrl || DEFAULT_SITEMAP_URL;
@@ -456,7 +411,7 @@ app.post('/sitemap-urls', async (req, res) => {
   }
 });
 
-// ✅ Internal link suggestion endpoint
+// Internal link suggestion endpoint
 app.post('/internal-links', async (req, res) => {
   try {
     const {
@@ -482,6 +437,7 @@ app.post('/internal-links', async (req, res) => {
         return {
           url: item.url,
           lastmod: item.lastmod,
+          type: item.type,
           titleFromSlug: item.titleFromSlug,
           anchorSuggestion: item.titleFromSlug,
           score: scoring.score,
@@ -506,7 +462,7 @@ app.post('/internal-links', async (req, res) => {
   }
 });
 
-// ✅ Render PORT
+// Render PORT
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
