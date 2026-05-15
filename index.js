@@ -120,7 +120,7 @@ app.get('/routes', (req, res) => {
   res.json({
     status: 'ok',
     service: 'multi-site-seo-api',
-    routes: [
+  routes: [
   'GET /',
   'GET /health',
   'GET /routes',
@@ -130,7 +130,8 @@ app.get('/routes', (req, res) => {
   'POST /sitemap-urls',
   'POST /internal-links',
   'POST /get-internal-links',
-  'POST /getInternalLinkSuggestions'
+  'POST /getInternalLinkSuggestions',
+  'POST /internal-link-suggestions-v2'
 ],
     time: new Date().toISOString()
   });
@@ -603,6 +604,7 @@ async function handleInternalLinks(req, res) {
 app.post('/internal-links', handleInternalLinks);
 app.post('/get-internal-links', handleInternalLinks);
 app.post('/getInternalLinkSuggestions', handleInternalLinks);
+app.post('/internal-link-suggestions-v2', handleInternalLinks);
 
 // ---------- Render PORT ----------
 
