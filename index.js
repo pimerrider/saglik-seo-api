@@ -121,16 +121,17 @@ app.get('/routes', (req, res) => {
     status: 'ok',
     service: 'multi-site-seo-api',
     routes: [
-      'GET /',
-      'GET /health',
-      'GET /routes',
-      'POST /gsc-data',
-      'POST /gsc-pages',
-      'POST /gsc-query-pages',
-      'POST /sitemap-urls',
-      'POST /internal-links',
-      'POST /get-internal-links'
-    ],
+  'GET /',
+  'GET /health',
+  'GET /routes',
+  'POST /gsc-data',
+  'POST /gsc-pages',
+  'POST /gsc-query-pages',
+  'POST /sitemap-urls',
+  'POST /internal-links',
+  'POST /get-internal-links',
+  'POST /getInternalLinkSuggestions'
+],
     time: new Date().toISOString()
   });
 });
@@ -601,6 +602,7 @@ async function handleInternalLinks(req, res) {
 
 app.post('/internal-links', handleInternalLinks);
 app.post('/get-internal-links', handleInternalLinks);
+app.post('/getInternalLinkSuggestions', handleInternalLinks);
 
 // ---------- Render PORT ----------
 
