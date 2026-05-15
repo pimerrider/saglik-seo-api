@@ -407,16 +407,16 @@ function expandTopicTokens(topic) {
     'yemek',
     'yemegi',
     'dish',
-    'food'
+    'food',
     'health',
-'medical',
-'symptoms',
-'treatment',
-'nedir',
-'neden',
-'nasil',
-'belirti',
-'tedavi
+    'medical',
+    'symptoms',
+    'treatment',
+    'nedir',
+    'neden',
+    'nasil',
+    'belirti',
+    'tedavi',
   ]);
 
   const tokens = normalized
