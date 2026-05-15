@@ -605,6 +605,7 @@ app.post('/internal-links', handleInternalLinks);
 app.post('/get-internal-links', handleInternalLinks);
 app.post('/getInternalLinkSuggestions', handleInternalLinks);
 app.post('/internal-link-suggestions-v2', handleInternalLinks);
+app.post('/getInternalLinkSuggestionsV2', handleInternalLinks);
 
 // ---------- Render PORT ----------
 
