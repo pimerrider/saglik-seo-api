@@ -299,25 +299,35 @@ function expandTopicTokens(topic) {
   const normalized = normalizeText(topic);
 
   const stopwords = new Set([
-    'recipe',
-    'authentic',
-    'traditional',
-    'turkish',
-    'easy',
-    'homemade',
-    'how',
-    'make',
-    'with',
-    'and',
-    'the',
-    'for',
-    'from',
-    'tarifi',
-    'yemek',
-    'yemegi',
-    'dish',
-    'food'
-  ]);
+  'recipe',
+  'authentic',
+  'traditional',
+  'turkish',
+  'easy',
+  'homemade',
+  'how',
+  'make',
+  'with',
+  'and',
+  'the',
+  'for',
+  'from',
+  'dish',
+  'food',
+  'tarifi',
+  'yemek',
+  'yemegi',
+  'yemeği',
+  'lezzetli',
+  'kolay',
+  'ev',
+  'usulu',
+  'usulü',
+  'nasil',
+  'nasıl',
+  'yapilir',
+  'yapılır'
+]);
 
   const tokens = normalized
     .split(/[^a-z0-9]+/i)
