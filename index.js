@@ -2,12 +2,16 @@ const express = require('express');
 const { google } = require('googleapis');
 const axios = require('axios');
 const { parseStringPromise } = require('xml2js');
+const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 
 const app = express();
 app.use(express.json());
 
 const CACHE_TTL_MS = 1000 * 60 * 30; // 30 minutes
 const sitemapCache = new Map();
+
+let parsedGoogleCredentials = null;
+let analyticsDataClient = null;
 
 /**
  * Allowed domains:
@@ -20,7 +24,7 @@ const sitemapCache = new Map();
  */
 const DEFAULT_ALLOWED_DOMAINS = [
   'turkishdishes.net',
-  'saglikliturkiye.net'
+  'saglikliturkiye.net',
 ];
 
 function normalizeDomain(domain = '') {
@@ -79,20 +83,75 @@ function requireAllowedDomain(input, fieldName = 'url') {
   }
 }
 
+function getGoogleCredentials() {
+  if (parsedGoogleCredentials) {
+    return parsedGoogleCredentials;
+  }
+
+  if (!process.env.GOOGLE_CREDENTIALS) {
+    throw new Error('GOOGLE_CREDENTIALS environment variable is missing.');
+  }
+
+  try {
+    parsedGoogleCredentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    return parsedGoogleCredentials;
+  } catch (error) {
+    throw new Error(`GOOGLE_CREDENTIALS is not valid JSON: ${error.message}`);
+  }
+}
+
 /**
  * Google Auth is created lazily.
  * This prevents sitemap/internal-link endpoints from failing
  * if GOOGLE_CREDENTIALS has an issue.
  */
 function getGoogleAuth() {
-  if (!process.env.GOOGLE_CREDENTIALS) {
-    throw new Error('GOOGLE_CREDENTIALS environment variable is missing.');
-  }
-
   return new google.auth.GoogleAuth({
-    credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
+    credentials: getGoogleCredentials(),
     scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
   });
+}
+
+/**
+ * GA4 client is created lazily.
+ * It uses the same GOOGLE_CREDENTIALS service account.
+ * Make sure this service account has Viewer or Analyst access in GA4.
+ */
+function getGA4Client() {
+  if (!analyticsDataClient) {
+    analyticsDataClient = new BetaAnalyticsDataClient({
+      credentials: getGoogleCredentials(),
+    });
+  }
+
+  return analyticsDataClient;
+}
+
+function getGA4PropertyId(inputPropertyId) {
+  const propertyId = inputPropertyId || process.env.GA4_PROPERTY_ID;
+
+  if (!propertyId) {
+    throw new Error(
+      'propertyId is required or GA4_PROPERTY_ID environment variable must be set.'
+    );
+  }
+
+  return String(propertyId).replace(/^properties\//, '').trim();
+}
+
+function toNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getSafeRowLimit(rowLimit, fallback = 100, max = 1000) {
+  const parsed = Number(rowLimit);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.min(parsed, max);
 }
 
 // ---------- Health & Routes ----------
@@ -120,20 +179,23 @@ app.get('/routes', (req, res) => {
   res.json({
     status: 'ok',
     service: 'multi-site-seo-api',
-  routes: [
-  'GET /',
-  'GET /health',
-  'GET /routes',
-  'POST /gsc-data',
-  'POST /gsc-pages',
-  'POST /gsc-query-pages',
-  'POST /sitemap-urls',
-  'POST /internal-links',
-  'POST /get-internal-links',
-  'POST /getInternalLinkSuggestions',
-  'POST /internal-link-suggestions-v2'
-],
-    time: new Date().toISOString()
+    routes: [
+      'GET /',
+      'GET /health',
+      'GET /routes',
+      'POST /gsc-data',
+      'POST /gsc-pages',
+      'POST /gsc-query-pages',
+      'POST /ga4-pages',
+      'POST /ga4-traffic',
+      'POST /sitemap-urls',
+      'POST /internal-links',
+      'POST /get-internal-links',
+      'POST /getInternalLinkSuggestions',
+      'POST /internal-link-suggestions-v2',
+      'POST /getInternalLinkSuggestionsV2',
+    ],
+    time: new Date().toISOString(),
   });
 });
 
@@ -164,7 +226,8 @@ app.post('/gsc-data', async (req, res) => {
       requestBody: {
         startDate,
         endDate,
-        dimensions: Array.isArray(dimensions) && dimensions.length ? dimensions : ['query'],
+        dimensions:
+          Array.isArray(dimensions) && dimensions.length ? dimensions : ['query'],
         rowLimit: rowLimit || 1000,
       },
     });
@@ -256,6 +319,160 @@ app.post('/gsc-query-pages', async (req, res) => {
   }
 });
 
+// ---------- GA4 Endpoints ----------
+
+app.post('/ga4-pages', async (req, res) => {
+  try {
+    const {
+      propertyId,
+      startDate,
+      endDate,
+      rowLimit = 100,
+    } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: 'startDate and endDate are required.',
+      });
+    }
+
+    const cleanPropertyId = getGA4PropertyId(propertyId);
+    const safeRowLimit = getSafeRowLimit(rowLimit, 100, 1000);
+    const analyticsClient = getGA4Client();
+
+    const [response] = await analyticsClient.runReport({
+      property: `properties/${cleanPropertyId}`,
+      dateRanges: [
+        {
+          startDate,
+          endDate,
+        },
+      ],
+      dimensions: [
+        { name: 'landingPagePlusQueryString' },
+        { name: 'pageTitle' },
+      ],
+      metrics: [
+        { name: 'screenPageViews' },
+        { name: 'sessions' },
+        { name: 'activeUsers' },
+        { name: 'engagedSessions' },
+        { name: 'engagementRate' },
+        { name: 'averageSessionDuration' },
+        { name: 'bounceRate' },
+      ],
+      orderBys: [
+        {
+          metric: {
+            metricName: 'sessions',
+          },
+          desc: true,
+        },
+      ],
+      limit: safeRowLimit,
+    });
+
+    const rows = (response.rows || []).map(row => ({
+      landingPage: row.dimensionValues?.[0]?.value || '',
+      pageTitle: row.dimensionValues?.[1]?.value || '',
+      views: toNumber(row.metricValues?.[0]?.value),
+      sessions: toNumber(row.metricValues?.[1]?.value),
+      activeUsers: toNumber(row.metricValues?.[2]?.value),
+      engagedSessions: toNumber(row.metricValues?.[3]?.value),
+      engagementRate: toNumber(row.metricValues?.[4]?.value),
+      averageSessionDuration: toNumber(row.metricValues?.[5]?.value),
+      bounceRate: toNumber(row.metricValues?.[6]?.value),
+    }));
+
+    res.json({
+      propertyId: cleanPropertyId,
+      startDate,
+      endDate,
+      rowLimit: safeRowLimit,
+      count: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('GA4 PAGES ERROR:', error);
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
+
+app.post('/ga4-traffic', async (req, res) => {
+  try {
+    const {
+      propertyId,
+      startDate,
+      endDate,
+      rowLimit = 100,
+    } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: 'startDate and endDate are required.',
+      });
+    }
+
+    const cleanPropertyId = getGA4PropertyId(propertyId);
+    const safeRowLimit = getSafeRowLimit(rowLimit, 100, 1000);
+    const analyticsClient = getGA4Client();
+
+    const [response] = await analyticsClient.runReport({
+      property: `properties/${cleanPropertyId}`,
+      dateRanges: [
+        {
+          startDate,
+          endDate,
+        },
+      ],
+      dimensions: [
+        { name: 'sessionDefaultChannelGroup' },
+        { name: 'sessionSourceMedium' },
+      ],
+      metrics: [
+        { name: 'sessions' },
+        { name: 'activeUsers' },
+        { name: 'engagedSessions' },
+        { name: 'engagementRate' },
+      ],
+      orderBys: [
+        {
+          metric: {
+            metricName: 'sessions',
+          },
+          desc: true,
+        },
+      ],
+      limit: safeRowLimit,
+    });
+
+    const rows = (response.rows || []).map(row => ({
+      channelGroup: row.dimensionValues?.[0]?.value || '',
+      sourceMedium: row.dimensionValues?.[1]?.value || '',
+      sessions: toNumber(row.metricValues?.[0]?.value),
+      activeUsers: toNumber(row.metricValues?.[1]?.value),
+      engagedSessions: toNumber(row.metricValues?.[2]?.value),
+      engagementRate: toNumber(row.metricValues?.[3]?.value),
+    }));
+
+    res.json({
+      propertyId: cleanPropertyId,
+      startDate,
+      endDate,
+      rowLimit: safeRowLimit,
+      count: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('GA4 TRAFFIC ERROR:', error);
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
+
 // ---------- Sitemap Helpers ----------
 
 function toArray(value) {
@@ -313,7 +530,7 @@ async function fetchXml(url) {
   const response = await axios.get(url, {
     timeout: 15000,
     headers: {
-      'User-Agent': 'MultiSiteSEOAPI/1.2',
+      'User-Agent': 'MultiSiteSEOAPI/1.3',
       Accept: 'application/xml,text/xml,*/*',
     },
   });
@@ -487,9 +704,46 @@ function isLowValueUrl(searchable) {
   );
 }
 
+function getTopicContext(topic) {
+  const normalized = normalizeText(topic);
+
+  const isDessertTopic =
+    normalized.includes('dessert') ||
+    normalized.includes('sweet') ||
+    normalized.includes('kunefe') ||
+    normalized.includes('künefe') ||
+    normalized.includes('baklava') ||
+    normalized.includes('syrup') ||
+    normalized.includes('serbet') ||
+    normalized.includes('kadayıf') ||
+    normalized.includes('kadayif') ||
+    normalized.includes('halva') ||
+    normalized.includes('sutlac') ||
+    normalized.includes('pudding');
+
+  const isSoupTopic =
+    normalized.includes('soup') ||
+    normalized.includes('corba') ||
+    normalized.includes('çorba');
+
+  const isKebabTopic =
+    normalized.includes('kebab') ||
+    normalized.includes('kebap') ||
+    normalized.includes('lamb') ||
+    normalized.includes('beef') ||
+    normalized.includes('meat');
+
+  return {
+    isDessertTopic,
+    isSoupTopic,
+    isKebabTopic,
+  };
+}
+
 function scoreInternalLink(item, topic, currentUrl = '') {
   const tokens = expandTopicTokens(topic);
   const searchable = normalizeText(`${item.url} ${item.titleFromSlug}`);
+  const context = getTopicContext(topic);
 
   let score = 0;
   const reasons = [];
@@ -528,6 +782,56 @@ function scoreInternalLink(item, topic, currentUrl = '') {
   if (isPossibleHub && score > 0) {
     score += 2;
     reasons.push('Possible related hub/category page');
+  }
+
+  if (context.isDessertTopic) {
+    const dessertSignals = [
+      'dessert',
+      'sweet',
+      'baklava',
+      'kunefe',
+      'kadayif',
+      'pumpkin-dessert',
+      'halva',
+      'sutlac',
+      'pudding',
+      'sekerpare',
+      'cake',
+      'cheesecake',
+    ];
+
+    const savorySignals = [
+      'borek',
+      'kebab',
+      'soup',
+      'corba',
+      'salad',
+      'chicken',
+      'lamb',
+      'beef',
+      'meat',
+      'dinner',
+    ];
+
+    if (dessertSignals.some(signal => searchable.includes(signal))) {
+      score += 5;
+      reasons.push('Dessert topic match');
+    }
+
+    if (savorySignals.some(signal => searchable.includes(signal))) {
+      score -= 8;
+      reasons.push('Possible savory mismatch for dessert topic');
+    }
+  }
+
+  if (context.isSoupTopic && searchable.includes('soup')) {
+    score += 5;
+    reasons.push('Soup topic match');
+  }
+
+  if (context.isKebabTopic && searchable.includes('kebab')) {
+    score += 5;
+    reasons.push('Kebab topic match');
   }
 
   return {
