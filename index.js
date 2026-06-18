@@ -925,10 +925,8 @@ app.post('/page-seo-audit', async (req, res) => {
       });
     }
 
-    // Güvenlik: sadece izin verilen domainler
     requireAllowedDomain(url, 'url');
 
-    // Sayfanın HTML'ini indir
     const response = await axios.get(url, {
       timeout: 15000,
       headers: {
@@ -937,13 +935,34 @@ app.post('/page-seo-audit', async (req, res) => {
     });
 
     const html = response.data;
+    const $ = cheerio.load(html);
 
-    // İlk test: HTML gerçekten geldi mi?
+    const title = $('title').first().text().trim();
+
+    const metaDescription =
+      $('meta[name="description"]').attr('content') || '';
+
+    const canonical =
+      $('link[rel="canonical"]').attr('href') || '';
+
+    const robots =
+      $('meta[name="robots"]').attr('content') || '';
+
+    const h1List = $('h1')
+      .map((i, el) => $(el).text().trim())
+      .get();
+
     res.json({
       success: true,
       url,
-      htmlLength: html.length,
-      htmlPreview: html.substring(0, 500)
+      seo: {
+        title,
+        metaDescription,
+        canonical,
+        robots,
+        h1Count: h1List.length,
+        h1: h1List
+      }
     });
 
   } catch (error) {
