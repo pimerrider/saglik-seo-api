@@ -912,6 +912,34 @@ app.post('/getInternalLinkSuggestions', handleInternalLinks);
 app.post('/internal-link-suggestions-v2', handleInternalLinks);
 app.post('/getInternalLinkSuggestionsV2', handleInternalLinks);
 
+// ---------- Page SEO Audit ----------
+
+app.post('/page-seo-audit', async (req, res) => {
+  try {
+    const { url } = req.body;
+
+    if (!url) {
+      return res.status(400).json({
+        error: 'url is required.'
+      });
+    }
+
+    requireAllowedDomain(url, 'url');
+
+    res.json({
+      success: true,
+      message: 'Page SEO Audit endpoint is ready.',
+      url
+    });
+
+  } catch (error) {
+    console.error('PAGE SEO AUDIT ERROR:', error);
+
+    res.status(500).json({
+      error: error.toString()
+    });
+  }
+});
 // ---------- Render PORT ----------
 
 const PORT = process.env.PORT || 3000;
