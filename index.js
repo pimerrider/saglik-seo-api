@@ -195,6 +195,7 @@ app.get('/routes', (req, res) => {
       'POST /getInternalLinkSuggestions',
       'POST /internal-link-suggestions-v2',
       'POST /getInternalLinkSuggestionsV2',
+      'POST /page-seo-audit',
     ],
     time: new Date().toISOString(),
   });
