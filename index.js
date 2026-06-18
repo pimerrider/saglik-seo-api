@@ -925,12 +925,25 @@ app.post('/page-seo-audit', async (req, res) => {
       });
     }
 
+    // Güvenlik: sadece izin verilen domainler
     requireAllowedDomain(url, 'url');
 
+    // Sayfanın HTML'ini indir
+    const response = await axios.get(url, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SEOAuditBot/1.0)'
+      }
+    });
+
+    const html = response.data;
+
+    // İlk test: HTML gerçekten geldi mi?
     res.json({
       success: true,
-      message: 'Page SEO Audit endpoint is ready.',
-      url
+      url,
+      htmlLength: html.length,
+      htmlPreview: html.substring(0, 500)
     });
 
   } catch (error) {
