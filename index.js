@@ -188,6 +188,7 @@ app.get('/routes', (req, res) => {
       // GSC
       'POST /gsc-data',
       'POST /gsc-pages',
+      'POST /gsc-top-pages',
       'POST /gsc-query-pages',
       'POST /gsc-pages-zero-clicks',
       'POST /gsc-pages-low-ctr',
@@ -485,6 +486,78 @@ app.post('/gsc-page-queries', async (req, res) => {
   } catch (error) {
     console.error('GSC PAGE QUERIES ERROR:', error);
 
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
+app.post('/gsc-top-pages', async (req, res) => {
+  try {
+    const {
+      siteUrl,
+      startDate,
+      endDate,
+      rowLimit = 100,
+      minClicks = 1,
+      postsOnly = true,
+    } = req.body;
+
+    if (!siteUrl || !startDate || !endDate) {
+      return res.status(400).json({
+        error: 'siteUrl, startDate and endDate are required.',
+      });
+    }
+
+    requireAllowedDomain(siteUrl, 'siteUrl');
+
+    const auth = getGoogleAuth();
+    const authClient = await auth.getClient();
+
+    const searchconsole = google.searchconsole({
+      version: 'v1',
+      auth: authClient,
+    });
+
+    const response = await searchconsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ['page'],
+        rowLimit: getSafeRowLimit(rowLimit, 100, 5000),
+      },
+    });
+
+    const rows = (response.data.rows || [])
+      .map(row => ({
+        page: row.keys?.[0] || '',
+        clicks: toNumber(row.clicks),
+        impressions: toNumber(row.impressions),
+        ctr: toNumber(row.ctr),
+        position: toNumber(row.position),
+      }))
+      .filter(row => {
+        if (row.clicks < Number(minClicks)) return false;
+
+        if (postsOnly && isLowValueUrl(row.page)) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => b.clicks - a.clicks);
+
+    res.json({
+      siteUrl,
+      startDate,
+      endDate,
+      minClicks: Number(minClicks),
+      postsOnly: Boolean(postsOnly),
+      count: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('GSC TOP PAGES ERROR:', error);
     res.status(500).json({
       error: error.toString(),
     });
