@@ -496,9 +496,14 @@ app.post('/gsc-page-queries', async (req, res) => {
       ...(includeDebug
         ? {
             debug: {
-              totalRows: rawRows.length,
-              rawRows,
-            },
+  totalRows: rawRows.length,
+  sampleRows: rawRows.slice(0, 20),
+  matchingRows: rawRows
+    .filter(r =>
+      normalizeUrlForCompare(r.keys?.[1] || '') === normalizedPageUrl
+    )
+    .slice(0, 20),
+},
           }
         : {}),
     });
