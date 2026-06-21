@@ -187,6 +187,7 @@ app.get('/routes', (req, res) => {
       'POST /gsc-data',
       'POST /gsc-pages',
       'POST /gsc-query-pages',
+      'POST /gsc-pages-zero-clicks',
       'POST /ga4-pages',
       'POST /ga4-traffic',
       'POST /sitemap-urls',
@@ -196,7 +197,6 @@ app.get('/routes', (req, res) => {
       'POST /internal-link-suggestions-v2',
       'POST /getInternalLinkSuggestionsV2',
       'POST /page-seo-audit',
-      'POST /gsc-pages-zero-clicks',
     ],
     time: new Date().toISOString(),
   });
