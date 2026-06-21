@@ -343,6 +343,7 @@ app.post('/gsc-pages-zero-clicks', async (req, res) => {
       endDate,
       rowLimit = 5000,
       minImpressions = 1,
+      postsOnly = true,
     } = req.body;
 
     if (!siteUrl || !startDate || !endDate) {
@@ -379,7 +380,16 @@ app.post('/gsc-pages-zero-clicks', async (req, res) => {
         ctr: toNumber(row.ctr),
         position: toNumber(row.position),
       }))
-      .filter(row => row.clicks === 0 && row.impressions >= Number(minImpressions))
+      .filter(row => {
+        if (row.clicks !== 0) return false;
+        if (row.impressions < Number(minImpressions)) return false;
+
+        if (postsOnly && isLowValueUrl(row.page)) {
+          return false;
+        }
+
+        return true;
+      })
       .sort((a, b) => b.impressions - a.impressions);
 
     res.json({
@@ -387,6 +397,7 @@ app.post('/gsc-pages-zero-clicks', async (req, res) => {
       startDate,
       endDate,
       minImpressions: Number(minImpressions),
+      postsOnly: Boolean(postsOnly),
       count: rows.length,
       rows,
     });
@@ -397,6 +408,7 @@ app.post('/gsc-pages-zero-clicks', async (req, res) => {
     });
   }
 });
+
 app.post('/gsc-page-queries', async (req, res) => {
   try {
     const {
@@ -405,6 +417,7 @@ app.post('/gsc-page-queries', async (req, res) => {
       startDate,
       endDate,
       rowLimit = 5000,
+      postsOnly = false,
     } = req.body;
 
     if (!siteUrl || !pageUrl || !startDate || !endDate) {
@@ -415,6 +428,19 @@ app.post('/gsc-page-queries', async (req, res) => {
 
     requireAllowedDomain(siteUrl, 'siteUrl');
     requireAllowedDomain(pageUrl, 'pageUrl');
+
+    if (postsOnly && isLowValueUrl(pageUrl)) {
+      return res.json({
+        siteUrl,
+        pageUrl,
+        startDate,
+        endDate,
+        postsOnly: Boolean(postsOnly),
+        count: 0,
+        rows: [],
+        note: 'pageUrl was excluded because postsOnly is true and URL is low-value.',
+      });
+    }
 
     const auth = getGoogleAuth();
     const authClient = await auth.getClient();
@@ -451,6 +477,7 @@ app.post('/gsc-page-queries', async (req, res) => {
       pageUrl,
       startDate,
       endDate,
+      postsOnly: Boolean(postsOnly),
       count: rows.length,
       rows,
     });
@@ -839,10 +866,16 @@ function expandTopicTokens(topic) {
 function isLowValueUrl(searchable) {
   return (
     searchable.includes('/wp-') ||
+    searchable.includes('/wp-content/') ||
     searchable.includes('/feed') ||
     searchable.includes('/tag/') ||
     searchable.includes('/author/') ||
     searchable.includes('/attachment/') ||
+    searchable.includes('/page/') ||
+    searchable.includes('/newsletter/') ||
+    searchable.includes('/privacy-policy') ||
+    searchable.includes('/user-policy') ||
+    searchable.includes('/about-us') ||
     searchable.includes('?') ||
     searchable.includes('#')
   );
