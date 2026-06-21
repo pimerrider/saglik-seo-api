@@ -184,18 +184,31 @@ app.get('/routes', (req, res) => {
       'GET /',
       'GET /health',
       'GET /routes',
+
+      // GSC
       'POST /gsc-data',
       'POST /gsc-pages',
       'POST /gsc-query-pages',
       'POST /gsc-pages-zero-clicks',
+      'POST /gsc-pages-low-ctr',
+      'POST /gsc-pages-position-5-20',
+      'POST /gsc-page-queries',
+
+      // GA4
       'POST /ga4-pages',
       'POST /ga4-traffic',
+
+      // Sitemap
       'POST /sitemap-urls',
+
+      // Internal Links
       'POST /internal-links',
       'POST /get-internal-links',
       'POST /getInternalLinkSuggestions',
       'POST /internal-link-suggestions-v2',
       'POST /getInternalLinkSuggestionsV2',
+
+      // SEO
       'POST /page-seo-audit',
     ],
     time: new Date().toISOString(),
