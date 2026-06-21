@@ -196,6 +196,7 @@ app.get('/routes', (req, res) => {
       'POST /internal-link-suggestions-v2',
       'POST /getInternalLinkSuggestionsV2',
       'POST /page-seo-audit',
+      'POST /gsc-pages-zero-clicks',
     ],
     time: new Date().toISOString(),
   });
@@ -230,7 +231,7 @@ app.post('/gsc-data', async (req, res) => {
         endDate,
         dimensions:
           Array.isArray(dimensions) && dimensions.length ? dimensions : ['query'],
-        rowLimit: rowLimit || 1000,
+        rowLimit: getSafeRowLimit(rowLimit, 1000, 5000),
       },
     });
 
@@ -269,7 +270,7 @@ app.post('/gsc-pages', async (req, res) => {
         startDate,
         endDate,
         dimensions: ['page'],
-        rowLimit: rowLimit || 1000,
+        rowLimit: getSafeRowLimit(rowLimit, 1000, 5000),
       },
     });
 
@@ -308,7 +309,7 @@ app.post('/gsc-query-pages', async (req, res) => {
         startDate,
         endDate,
         dimensions: ['query', 'page'],
-        rowLimit: rowLimit || 1000,
+        rowLimit: getSafeRowLimit(rowLimit, 1000, 5000),
       },
     });
 
@@ -321,6 +322,68 @@ app.post('/gsc-query-pages', async (req, res) => {
   }
 });
 
+app.post('/gsc-pages-zero-clicks', async (req, res) => {
+  try {
+    const {
+      siteUrl,
+      startDate,
+      endDate,
+      rowLimit = 5000,
+      minImpressions = 1,
+    } = req.body;
+
+    if (!siteUrl || !startDate || !endDate) {
+      return res.status(400).json({
+        error: 'siteUrl, startDate and endDate are required.',
+      });
+    }
+
+    requireAllowedDomain(siteUrl, 'siteUrl');
+
+    const auth = getGoogleAuth();
+    const authClient = await auth.getClient();
+
+    const searchconsole = google.searchconsole({
+      version: 'v1',
+      auth: authClient,
+    });
+
+    const response = await searchconsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ['page'],
+        rowLimit: getSafeRowLimit(rowLimit, 1000, 5000),
+      },
+    });
+
+    const rows = (response.data.rows || [])
+      .map(row => ({
+        page: row.keys?.[0] || '',
+        clicks: toNumber(row.clicks),
+        impressions: toNumber(row.impressions),
+        ctr: toNumber(row.ctr),
+        position: toNumber(row.position),
+      }))
+      .filter(row => row.clicks === 0 && row.impressions >= Number(minImpressions))
+      .sort((a, b) => b.impressions - a.impressions);
+
+    res.json({
+      siteUrl,
+      startDate,
+      endDate,
+      minImpressions: Number(minImpressions),
+      count: rows.length,
+      rows,
+    });
+  } catch (error) {
+    console.error('GSC ZERO CLICKS ERROR:', error);
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
 // ---------- GA4 Endpoints ----------
 
 app.post('/ga4-pages', async (req, res) => {
