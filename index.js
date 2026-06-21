@@ -419,6 +419,7 @@ app.post('/gsc-page-queries', async (req, res) => {
       endDate,
       rowLimit = 5000,
       postsOnly = false,
+      includeDebug = true,
     } = req.body;
 
     if (!siteUrl || !pageUrl || !startDate || !endDate) {
@@ -429,6 +430,12 @@ app.post('/gsc-page-queries', async (req, res) => {
 
     requireAllowedDomain(siteUrl, 'siteUrl');
     requireAllowedDomain(pageUrl, 'pageUrl');
+
+    const normalizeUrlForCompare = url =>
+      String(url || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\/$/, '');
 
     if (postsOnly && isLowValueUrl(pageUrl)) {
       return res.json({
@@ -461,16 +468,21 @@ app.post('/gsc-page-queries', async (req, res) => {
       },
     });
 
-    const rows = (response.data.rows || [])
-      .map(row => ({
-        query: row.keys?.[0] || '',
-        page: row.keys?.[1] || '',
-        clicks: toNumber(row.clicks),
-        impressions: toNumber(row.impressions),
-        ctr: toNumber(row.ctr),
-        position: toNumber(row.position),
-      }))
-      .filter(row => row.page === pageUrl)
+    const rawRows = response.data.rows || [];
+
+    const allRows = rawRows.map(row => ({
+      query: row.keys?.[0] || '',
+      page: row.keys?.[1] || '',
+      clicks: toNumber(row.clicks),
+      impressions: toNumber(row.impressions),
+      ctr: toNumber(row.ctr),
+      position: toNumber(row.position),
+    }));
+
+    const normalizedPageUrl = normalizeUrlForCompare(pageUrl);
+
+    const rows = allRows
+      .filter(row => normalizeUrlForCompare(row.page) === normalizedPageUrl)
       .sort((a, b) => b.impressions - a.impressions);
 
     res.json({
@@ -481,6 +493,14 @@ app.post('/gsc-page-queries', async (req, res) => {
       postsOnly: Boolean(postsOnly),
       count: rows.length,
       rows,
+      ...(includeDebug
+        ? {
+            debug: {
+              totalRows: rawRows.length,
+              rawRows,
+            },
+          }
+        : {}),
     });
 
   } catch (error) {
