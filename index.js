@@ -397,6 +397,72 @@ app.post('/gsc-pages-zero-clicks', async (req, res) => {
     });
   }
 });
+app.post('/gsc-page-queries', async (req, res) => {
+  try {
+    const {
+      siteUrl,
+      pageUrl,
+      startDate,
+      endDate,
+      rowLimit = 5000,
+    } = req.body;
+
+    if (!siteUrl || !pageUrl || !startDate || !endDate) {
+      return res.status(400).json({
+        error: 'siteUrl, pageUrl, startDate and endDate are required.',
+      });
+    }
+
+    requireAllowedDomain(siteUrl, 'siteUrl');
+    requireAllowedDomain(pageUrl, 'pageUrl');
+
+    const auth = getGoogleAuth();
+    const authClient = await auth.getClient();
+
+    const searchconsole = google.searchconsole({
+      version: 'v1',
+      auth: authClient,
+    });
+
+    const response = await searchconsole.searchanalytics.query({
+      siteUrl,
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ['query', 'page'],
+        rowLimit: getSafeRowLimit(rowLimit, 1000, 5000),
+      },
+    });
+
+    const rows = (response.data.rows || [])
+      .map(row => ({
+        query: row.keys?.[0] || '',
+        page: row.keys?.[1] || '',
+        clicks: toNumber(row.clicks),
+        impressions: toNumber(row.impressions),
+        ctr: toNumber(row.ctr),
+        position: toNumber(row.position),
+      }))
+      .filter(row => row.page === pageUrl)
+      .sort((a, b) => b.impressions - a.impressions);
+
+    res.json({
+      siteUrl,
+      pageUrl,
+      startDate,
+      endDate,
+      count: rows.length,
+      rows,
+    });
+
+  } catch (error) {
+    console.error('GSC PAGE QUERIES ERROR:', error);
+
+    res.status(500).json({
+      error: error.toString(),
+    });
+  }
+});
 // ---------- GA4 Endpoints ----------
 
 app.post('/ga4-pages', async (req, res) => {
