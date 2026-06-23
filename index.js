@@ -33,6 +33,8 @@ const axios      = require('axios');
 const { parseStringPromise } = require('xml2js');
 const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 const cheerio    = require('cheerio');
+const cors = require('cors');
+app.use(cors());
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
