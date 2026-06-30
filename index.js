@@ -307,7 +307,7 @@ app.get('/routes', (_req, res) => res.json({ routes:[
   'POST /ga4-pages', 'POST /ga4-traffic',
   "POST /project-memory",
   "POST /memory-add",
-  "POST /memory-summary"
+  "POST /memory-summary",
   'POST /sitemap-urls', 'POST /internal-link-suggestions',
   'POST /page-seo-audit', 'POST /page-deep-analysis',
   'POST /site-summary', 'POST /content-plan', 'POST /revision-analysis',
