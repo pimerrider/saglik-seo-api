@@ -308,6 +308,8 @@ app.get('/routes', (_req, res) => res.json({ routes:[
   "POST /project-memory",
   "POST /memory-add",
   "POST /memory-summary",
+  "POST /project-context",
+  "POST /project-log",
   'POST /sitemap-urls', 'POST /internal-link-suggestions',
   'POST /page-seo-audit', 'POST /page-deep-analysis',
   'POST /site-summary', 'POST /content-plan', 'POST /revision-analysis',
@@ -479,6 +481,46 @@ app.post("/memory-summary", async (req, res) => {
     res.json({
       status: "ok",
       summary
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message
+    });
+  }
+});
+
+app.post("/project-context", async (req, res) => {
+  try {
+    const memory = await getMemory();
+    const summary = await getSummary();
+
+    res.json({
+      status: "ok",
+      context: {
+        memory,
+        summary,
+        instruction:
+          "Use this project context before writing, revising, auditing, linking, or making TurkishDishes editorial decisions."
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message
+    });
+  }
+});
+
+app.post("/project-log", async (req, res) => {
+  try {
+    const entry = await addMemoryEntry(req.body);
+
+    res.json({
+      status: "ok",
+      saved: entry,
+      instruction:
+        "This project log entry has been saved and should be considered active project memory."
     });
   } catch (error) {
     res.status(500).json({
