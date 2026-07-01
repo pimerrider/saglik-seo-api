@@ -34,7 +34,7 @@ const { parseStringPromise } = require('xml2js');
 const { BetaAnalyticsDataClient } = require('@google-analytics/data');
 const cheerio    = require('cheerio');
 const cors       = require('cors');
-const { readMemory, addMemoryEntry } = require("./project-memory-store");
+const { getMemory, addMemoryEntry, getSummary } = require("./project-memory-store");
 const app = express();          // önce app oluştur
 app.use(cors());                 // sonra cors
 app.use(express.json({ limit: '2mb' }));
@@ -440,9 +440,9 @@ app.post('/gsc-pages-position-5-20', async (req, res) => {
   } catch(e) { fail(res,e,'GSC-POSITION-5-20'); }
 });
 
-app.post("/project-memory", (req, res) => {
+app.post("/project-memory", async (req, res) => {
   try {
-    const memory = readMemory();
+    const memory = await getMemory();
     res.json({
       status: "ok",
       memory
@@ -455,9 +455,9 @@ app.post("/project-memory", (req, res) => {
   }
 });
 
-app.post("/memory-add", (req, res) => {
+app.post("/memory-add", async (req, res) => {
   try {
-    const entry = addMemoryEntry(req.body);
+    const entry = await addMemoryEntry(req.body);
 
     res.json({
       status: "ok",
@@ -471,21 +471,21 @@ app.post("/memory-add", (req, res) => {
   }
 });
 
-app.post("/memory-summary", (req, res) => {
+app.post("/memory-summary", async (req, res) => {
   try {
-    const memory = readMemory();
+    const summary = await getSummary();
 
     res.json({
       status: "ok",
-      summary: {
-        activeRules: memory.activeRules.slice(-30),
-        recentChanges: memory.recentChanges.slice(-30),
-        articleHistory: memory.articleHistory.slice(-30),
-        importantDecisions: memory.importantDecisions.slice(-30),
-        todos: memory.todos.slice(-30),
-        updatedAt: memory.updatedAt
-      }
+      summary
     });
+  } catch (error) {
+    res.status(500).json({
+      status: "error",
+      message: error.message
+    });
+  }
+});
   } catch (error) {
     res.status(500).json({
       status: "error",
