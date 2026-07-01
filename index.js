@@ -443,6 +443,7 @@ app.post('/gsc-pages-position-5-20', async (req, res) => {
 app.post("/project-memory", async (req, res) => {
   try {
     const memory = await getMemory();
+
     res.json({
       status: "ok",
       memory
