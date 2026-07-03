@@ -952,7 +952,7 @@ app.post('/revision-analysis', async (req, res) => {
 res.json({
   projectContext,
   pageUrl,
-  performance:{ clicks, impressions, ctr, position:parseFloat(position.toFixed(1)) },,
+  performance:{ clicks, impressions, ctr, position:parseFloat(position.toFixed(1)) },
       seo:{ title, metaDescription:meta, h1 },
       verdict:{ decision, score, worthRevising:score>=30 },
       problems,
