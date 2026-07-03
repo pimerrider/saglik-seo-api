@@ -1061,7 +1061,282 @@ app.post('/content-plan', async (req, res) => {
     fail(res, e, 'CONTENT-PLAN-V2');
   }
 });
+app.post('/article-engine', async (req, res) => {
+  try {
+    const {
+      topic,
+      startDate,
+      endDate,
+      rowLimit = 5000
+    } = req.body;
 
+    const siteUrl = 'https://turkishdishes.net/';
+    const sitemapUrl = 'https://turkishdishes.net/sitemap_index.xml';
+
+    if (!topic) {
+      return res.status(400).json({ error: 'topic zorunlu.' });
+    }
+
+    const dates = defaultDates(startDate, endDate, 90);
+
+    const projectContext = await loadProjectContextSafe();
+
+    const topicText = String(topic).trim();
+    const topicNorm = normText(topicText);
+    const toks = tokens(topicText);
+
+    const [gscQueryRows, gscPageRows, sitemapUrls] = await Promise.all([
+      gscQuery({
+        siteUrl,
+        startDate: dates.startDate,
+        endDate: dates.endDate,
+        dimensions: ['query'],
+        rowLimit
+      }),
+      gscQuery({
+        siteUrl,
+        startDate: dates.startDate,
+        endDate: dates.endDate,
+        dimensions: ['page'],
+        rowLimit
+      }),
+      getSitemap(sitemapUrl, SITEMAP_MAX_URLS)
+    ]);
+
+    const queryRows = gscQueryRows.map(r => mapRow(r, ['query']));
+    const pageRows = gscPageRows.map(r => mapRow(r, ['page']));
+
+    const exactSlug = topicNorm
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    function relevanceScore(text) {
+      const n = normText(text || '');
+      let score = 0;
+
+      if (!n) return score;
+      if (n.includes(topicNorm)) score += 100;
+      if (exactSlug && n.includes(exactSlug)) score += 80;
+
+      for (const t of toks) {
+        if (n.includes(t)) score += 15;
+      }
+
+      const words = n.split(/[^a-z0-9]+/).filter(Boolean);
+      for (const t of toks) {
+        if (words.includes(t)) score += 10;
+      }
+
+      return score;
+    }
+
+    const existingPages = sitemapUrls
+      .filter(s => !isLowValue(s.url))
+      .map(s => ({
+        url: s.url,
+        title: s.titleFromSlug,
+        lastmod: s.lastmod || null,
+        relevanceScore: relevanceScore(`${s.url} ${s.titleFromSlug}`)
+      }))
+      .filter(s => s.relevanceScore > 0)
+      .sort((a, b) => b.relevanceScore - a.relevanceScore)
+      .slice(0, 15);
+
+    const exactExistingPages = existingPages.filter(p => p.relevanceScore >= 100);
+    const closeExistingPages = existingPages.filter(p => p.relevanceScore >= 40 && p.relevanceScore < 100);
+
+    const relatedQueries = queryRows
+      .map(q => ({
+        ...q,
+        relevanceScore: relevanceScore(q.query)
+      }))
+      .filter(q => q.relevanceScore >= 30)
+      .sort((a, b) => {
+        if (b.relevanceScore !== a.relevanceScore) return b.relevanceScore - a.relevanceScore;
+        return b.impressions - a.impressions;
+      })
+      .slice(0, 40);
+
+    const strongQueries = relatedQueries.filter(q => q.impressions >= 10 || q.clicks > 0);
+    const questionQueries = relatedQueries
+      .filter(q => /^(how|what|can|is|are|why|when|does|do|which)\b/i.test(q.query) || q.query.includes('?'))
+      .slice(0, 12);
+
+    const pageEvidence = pageRows
+      .map(p => ({
+        ...p,
+        relevanceScore: relevanceScore(p.page)
+      }))
+      .filter(p => p.relevanceScore > 0)
+      .sort((a, b) => b.relevanceScore - a.relevanceScore || b.impressions - a.impressions)
+      .slice(0, 15);
+
+    const titleCase = s => String(s)
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
+    const cleanTitle = titleCase(topicText.replace(/\brecipe\b/i, '').trim() || topicText);
+    const primaryKeyword = strongQueries.length ? strongQueries[0].query : topicText;
+
+    const duplicateRisk =
+      exactExistingPages.length > 0 ? 'high' :
+      closeExistingPages.length > 1 ? 'medium' :
+      closeExistingPages.length === 1 ? 'low' :
+      'none';
+
+    const cannibalizationRisk =
+      exactExistingPages.length > 0 ? 'high' :
+      pageEvidence.length > 1 ? 'medium' :
+      pageEvidence.length === 1 ? 'low' :
+      'none';
+
+    let action = 'write_new';
+    let confidence = 92;
+    let reason = 'Sitemap ve GSC verilerinde aynı konuya ait güçlü mevcut sayfa bulunmadı. Yeni içerik yazılabilir.';
+
+    if (exactExistingPages.length > 0) {
+      action = 'revise_existing';
+      confidence = 96;
+      reason = 'Sitemap içinde aynı veya çok yakın konuda mevcut sayfa bulundu. Yeni makale açmak yerine mevcut sayfa revize edilmeli.';
+    } else if (closeExistingPages.length >= 2 || pageEvidence.length >= 2) {
+      action = 'merge_or_write_new';
+      confidence = 78;
+      reason = 'Konuya yakın birden fazla sayfa veya GSC izi bulundu. Yeni içerik açmadan önce çakışma kontrolü yapılmalı.';
+    } else if (closeExistingPages.length === 1 || pageEvidence.length === 1) {
+      action = 'write_new_with_caution';
+      confidence = 84;
+      reason = 'Konuya yakın tek bir sayfa bulundu. Yeni içerik yazılabilir ancak kapsam ayrımı ve iç linkleme dikkatli yapılmalı.';
+    }
+
+    const internalLinks = sitemapUrls
+      .map(item => ({ ...item, score: scoreLink(item, topicText, '') }))
+      .filter(item => item.score > 0)
+      .filter(item => !exactExistingPages.some(p => normUrl(p.url) === normUrl(item.url)))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8)
+      .map(({ url, lastmod, titleFromSlug, score }) => ({
+        url,
+        titleFromSlug,
+        lastmod: lastmod || null,
+        anchorSuggestion: titleFromSlug,
+        score
+      }));
+
+    const suggestedSlug = exactSlug || topicNorm.replace(/\s+/g, '-');
+
+    const faqSuggestions = questionQueries.length
+      ? questionQueries.map(q => q.query)
+      : [
+          `What is ${cleanTitle}?`,
+          `How do you make ${cleanTitle} at home?`,
+          `What ingredients are used in ${cleanTitle}?`,
+          `Can ${cleanTitle} be made ahead?`,
+          `How do you store ${cleanTitle}?`,
+          `What are common mistakes when making ${cleanTitle}?`,
+          `What do you serve with ${cleanTitle}?`,
+          `Is ${cleanTitle} authentic Turkish food?`
+        ];
+
+    const sections = [
+      `What Is ${cleanTitle}?`,
+      `Why You'll Love This Recipe`,
+      `Ingredients`,
+      `Ingredient Notes & International Substitutions`,
+      `Equipment`,
+      `Step-by-Step Instructions`,
+      `Expert Tips`,
+      `Regional Variations`,
+      `Common Mistakes`,
+      `Serving Suggestions`,
+      `Storage & Reheating`,
+      `FAQ`,
+      `Conclusion`
+    ];
+
+    const nextSteps = [];
+
+    if (action === 'write_new' || action === 'write_new_with_caution') {
+      nextSteps.push('Proceed with a new publish-ready article after selecting sitemap-verified internal links.');
+    }
+
+    if (action === 'revise_existing') {
+      nextSteps.push('Do not create a new URL. Run revision-analysis on the existing page first.');
+    }
+
+    if (action === 'merge_or_write_new') {
+      nextSteps.push('Review similar existing pages before deciding whether to create, merge, or revise.');
+    }
+
+    if (internalLinks.length === 0) {
+      nextSteps.push('No strong internal links found. Do not force irrelevant links.');
+    }
+
+    res.json({
+      projectContext,
+      engine: 'article-engine-v1',
+      site: {
+        siteUrl,
+        sitemapUrl
+      },
+      topic: topicText,
+      period: dates,
+      decision: {
+        action,
+        confidence,
+        reason,
+        duplicateRisk,
+        cannibalizationRisk,
+        existingPageCount: existingPages.length,
+        gscPageEvidenceCount: pageEvidence.length
+      },
+      existingPages: {
+        exact: exactExistingPages,
+        close: closeExistingPages,
+        allRelevant: existingPages
+      },
+      gscEvidence: {
+        primaryKeyword,
+        relatedQueries,
+        strongQueries,
+        questionQueries,
+        pageEvidence,
+        dataQuality:
+          relatedQueries.length === 0 && pageEvidence.length === 0 ? 'no_related_gsc_data' :
+          strongQueries.length === 0 ? 'weak_related_gsc_data' :
+          'usable_related_gsc_data'
+      },
+      keywordPlan: {
+        primary: primaryKeyword,
+        focusKeyword: topicText,
+        secondaryKeywords: relatedQueries
+          .map(q => q.query)
+          .filter(q => q !== primaryKeyword)
+          .slice(0, 12),
+        semanticEntities: toks
+      },
+      structure: {
+        suggestedSlug,
+        h1: `${cleanTitle} Recipe`,
+        seoTitle: `${cleanTitle} Recipe | Authentic Turkish Homemade Method`,
+        metaDescription: `Learn how to make ${cleanTitle.toLowerCase()} with a clear step-by-step method, expert tips, serving ideas, storage advice and Turkish cooking notes.`,
+        sections,
+        faqSuggestions
+      },
+      internalLinks,
+      editorialNotes: {
+        introRule: 'Apply current project memory rules if available.',
+        internalLinkRule: 'Use only sitemap-verified URLs. Never invent internal links.',
+        articleRule: 'Do not write a new article if decision.action is revise_existing unless the user explicitly overrides after reviewing the evidence.'
+      },
+      nextSteps
+    });
+
+  } catch (e) {
+    fail(res, e, 'ARTICLE-ENGINE');
+  }
+});
 // ──────────────────────────────────────────────────────────────
 // REVİZYON ANALİZİ
 // ──────────────────────────────────────────────────────────────
