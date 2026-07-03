@@ -150,6 +150,20 @@ function daysAgo(n) { const d = new Date(); d.setDate(d.getDate()-n); return d.t
 function defaultDates(start, end, days=90) {
   return { startDate: start || daysAgo(days), endDate: end || new Date().toISOString().slice(0,10) };
 }
+async function loadProjectContextSafe() {
+  try {
+    const summary = await getSummary();
+    return {
+      status: "available",
+      summary
+    };
+  } catch (e) {
+    return {
+      status: "unavailable",
+      error: e.message
+    };
+  }
+}
 
 // ──────────────────────────────────────────────────────────────
 // GSC SERVİSİ
@@ -708,9 +722,12 @@ app.post('/page-deep-analysis', async (req, res) => {
     if (internalLinks.length)             actions.push(`${internalLinks.length} iç link ekle`);
     if (meta.length<80)                   actions.push('Meta description yeniden yaz (min 80 karakter)');
 
-    res.json({
-      pageUrl,
-      performance:{ clicks:pageMet.clicks||0, impressions:pageMet.impressions||0,
+    const projectContext = await loadProjectContextSafe();
+
+res.json({
+  projectContext,
+  pageUrl,
+  performance:{ clicks:pageMet.clicks||0, impressions:pageMet.impressions||0,
                     ctr:pageMet.ctr||0, avgPosition:pageMet.position||0 },
       seo:{ title, titleLength:title.length, metaDescription:meta,
             metaDescriptionLength:meta.length, canonical:canon, robots,
@@ -773,8 +790,11 @@ app.post('/site-summary', async (req, res) => {
         .slice(0,10).map(r=>({ ...r, note:'GSC tıklaması var ama GA4 oturumu yok' }));
     }
 
-    res.json({
-      siteUrl,
+    const projectContext = await loadProjectContextSafe();
+
+res.json({
+  projectContext,
+  siteUrl,
       period:{ startDate:dates.startDate, endDate:dates.endDate },
       overview:{
         totalClicks, totalImpressions,
@@ -833,8 +853,11 @@ app.post('/content-plan', async (req, res) => {
       .filter(item=>item.score>0).sort((a,b)=>b.score-a.score).slice(0,6)
       .map(({ url, titleFromSlug })=>({ url, titleFromSlug }));
 
-    res.json({
-      topic,
+    const projectContext = await loadProjectContextSafe();
+
+res.json({
+  projectContext,
+  topic,
       decision:{ action, reason, existingPages:existing },
       keyword:{ primary:primaryKw, longtail, gscRelatedQueries:related.slice(0,20) },
       structure:{
@@ -924,9 +947,12 @@ app.post('/revision-analysis', async (req, res) => {
     if (addSections.length)      actions.push(`Yeni bölüm ekle: ${addSections.slice(0,3).map(q=>`"${q.query}"`).join(', ')}`);
     if (problems.internalLinkGap) actions.push('İç link eksikliği kontrol edilmeli');
 
-    res.json({
-      pageUrl,
-      performance:{ clicks, impressions, ctr, position:parseFloat(position.toFixed(1)) },
+    const projectContext = await loadProjectContextSafe();
+
+res.json({
+  projectContext,
+  pageUrl,
+  performance:{ clicks, impressions, ctr, position:parseFloat(position.toFixed(1)) },,
       seo:{ title, metaDescription:meta, h1 },
       verdict:{ decision, score, worthRevising:score>=30 },
       problems,
