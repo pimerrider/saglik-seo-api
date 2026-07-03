@@ -1,8 +1,18 @@
 {
-  "activeRules": [],
+  "activeRules": [
+    {
+      "id": "1783107736237",
+      "createdAt": "2026-07-03T19:42:16.237Z",
+      "type": "rule",
+      "title": "Intro Maximum 100 Words",
+      "summary": "TurkishDishes article introductions must be maximum 100 words. This updates the older 90-120 word introduction rule.",
+      "category": "editorial",
+      "status": "active"
+    }
+  ],
   "recentChanges": [],
   "articleHistory": [],
   "importantDecisions": [],
   "todos": [],
-  "updatedAt": null
+  "updatedAt": "2026-07-03T19:42:16.237Z"
 }
