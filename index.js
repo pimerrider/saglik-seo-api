@@ -319,9 +319,6 @@ app.get('/routes', (_req, res) => res.json({ routes:[
   'POST /gsc-pages-zero-clicks', 'POST /gsc-top-pages', 'POST /gsc-page-queries',
   'POST /gsc-pages-low-ctr', 'POST /gsc-pages-position-5-20',
   'POST /ga4-pages', 'POST /ga4-traffic',
-  "POST /project-memory",
-  "POST /memory-add",
-  "POST /memory-summary",
   "POST /project-context",
   "POST /project-log",
   'POST /article-engine',
@@ -455,54 +452,6 @@ app.post('/gsc-pages-position-5-20', async (req, res) => {
       minImpressions:Number(minImpressions), label:'opportunity_pages',
       count:rows.length, rows });
   } catch(e) { fail(res,e,'GSC-POSITION-5-20'); }
-});
-
-app.post("/project-memory", async (req, res) => {
-  try {
-    const memory = await getMemory();
-
-    res.json({
-      status: "ok",
-      memory
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: "error",
-      message: error.message
-    });
-  }
-});
-
-app.post("/memory-add", async (req, res) => {
-  try {
-    const entry = await addMemoryEntry(req.body);
-
-    res.json({
-      status: "ok",
-      saved: entry
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: "error",
-      message: error.message
-    });
-  }
-});
-
-app.post("/memory-summary", async (req, res) => {
-  try {
-    const summary = await getSummary();
-
-    res.json({
-      status: "ok",
-      summary
-    });
-  } catch (error) {
-    res.status(500).json({
-      status: "error",
-      message: error.message
-    });
-  }
 });
 
 app.post("/project-context", async (req, res) => {
@@ -1341,6 +1290,167 @@ app.post('/article-engine', async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // REVİZYON ANALİZİ
 // ──────────────────────────────────────────────────────────────
+
+app.post('/revision-analysis', async (req, res) => {
+  try {
+    const { siteUrl, pageUrl, sitemapUrl, startDate, endDate, rowLimit = 5000 } = req.body;
+
+    if (!siteUrl || !pageUrl) {
+      return res.status(400).json({ error: 'siteUrl ve pageUrl zorunlu.' });
+    }
+    requireAllowed(pageUrl, 'pageUrl');
+    if (sitemapUrl) requireAllowed(sitemapUrl, 'sitemapUrl');
+
+    const dates  = defaultDates(startDate, endDate, 90);
+    const target = normUrl(pageUrl);
+    const topic  = slugToTitle(pageUrl).toLowerCase();
+
+    const [projectContext, gscPagesRaw, gscQueryRaw, auditRes, sitemapUrls] = await Promise.all([
+      loadProjectContextSafe(),
+      gscQuery({ siteUrl, startDate: dates.startDate, endDate: dates.endDate, dimensions: ['page'], rowLimit: 5000 }),
+      gscQuery({ siteUrl, startDate: dates.startDate, endDate: dates.endDate, dimensions: ['query', 'page'], rowLimit }),
+      axios.get(pageUrl, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SEOAuditBot/2.0)' } }),
+      sitemapUrl ? getSitemap(sitemapUrl, SITEMAP_MAX_URLS) : Promise.resolve([]),
+    ]);
+
+    // ── Performans ──
+    const pageMet      = gscPagesRaw.map(r => mapRow(r, ['page'])).find(r => normUrl(r.page) === target) || {};
+    const clicks        = pageMet.clicks || 0;
+    const impressions   = pageMet.impressions || 0;
+    const ctr           = pageMet.ctr || 0;
+    const position       = pageMet.position || 0;
+
+    const queries = gscQueryRaw.map(r => mapRow(r, ['query', 'page']))
+      .filter(r => normUrl(r.page) === target)
+      .sort((a, b) => b.impressions - a.impressions);
+
+    // ── SEO Audit (canlı HTML) ──
+    const $      = cheerio.load(auditRes.data);
+    const title  = $('title').first().text().trim();
+    const meta   = $('meta[name="description"]').attr('content')?.trim() || '';
+    const canon  = $('link[rel="canonical"]').attr('href')?.trim() || '';
+    const robots = $('meta[name="robots"]').attr('content')?.trim() || '';
+    const h1     = $('h1').map((_, el) => $(el).text().trim()).get();
+    const h2     = $('h2').map((_, el) => $(el).text().trim()).get();
+
+    const pageDomain = domainFromUrl(pageUrl);
+    const internalHrefCount = $('a[href]').filter((_, el) => {
+      const href = $(el).attr('href') || '';
+      if (href.startsWith('/')) return true;
+      return domainFromUrl(href) === pageDomain;
+    }).length;
+
+    // ── Sorgu sınıflandırması ──
+    const keepQueries         = queries.filter(q => q.position <= 10 && q.clicks > 0);
+    const addSectionsQ        = queries.filter(q => q.position > 10 && q.position <= 20 && q.impressions >= 30);
+    const dropQueries         = queries.filter(q => q.position > 50 && q.clicks === 0 && q.impressions > 0);
+    const faqCandidates       = queries.filter(q => /^(how|what|can|is|are|why|when|does|do|which)\b/i.test(q.query) || q.query.includes('?'));
+    const titleOpportunities  = queries.filter(q => q.impressions >= 100 && q.ctr < 0.03);
+
+    // ── İç link boşluğu ──
+    let internalLinkSuggestions = [];
+    let internalLinkGap = false;
+    if (sitemapUrl) {
+      internalLinkSuggestions = sitemapUrls
+        .map(item => ({ ...item, score: scoreLink(item, topic, pageUrl) }))
+        .filter(item => item.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+        .map(({ url, titleFromSlug, score }) => ({ url, titleFromSlug, score }));
+      internalLinkGap = internalLinkSuggestions.length > 0 && internalHrefCount < 5;
+    }
+
+    // ── Problem tespiti ──
+    const titleIssue     = !title || title.length < 30 || title.length > 65 || titleOpportunities.length > 0;
+    const metaIssue      = !meta || meta.length < 80 || meta.length > 165;
+    const h1Issue        = h1.length === 0 || h1.length > 1;
+    const contentGap     = addSectionsQ.length > 0;
+    const intentMismatch = faqCandidates.length >= 3 &&
+      h2.filter(h => h.includes('?') || /^(how|what|why|can|is)\b/i.test(h)).length === 0;
+
+    // ── Skor (100'den başlayıp düşülür) ──
+    let score = 100;
+    if (titleIssue)      score -= 12;
+    if (metaIssue)       score -= 8;
+    if (h1Issue)         score -= 15;
+    if (contentGap)      score -= 15;
+    if (intentMismatch)  score -= 10;
+    if (internalLinkGap) score -= 10;
+    if (impressions >= 200 && ctr < 0.02 && clicks > 0) score -= 10; // düşük CTR
+    if (impressions >= 20 && clicks === 0)              score -= 15; // gösterim var, tıklama yok
+    if (position > 20 && impressions > 0)               score -= 10; // zayıf pozisyon
+    if (impressions === 0)                               score -= 20; // GSC'de hiç görünmüyor
+    score = Math.max(0, Math.min(100, score));
+
+    let decision, worthRevising;
+    if (impressions === 0 && clicks === 0) {
+      decision = 'merge_or_delete';
+      worthRevising = true;
+    } else if (score >= 80) {
+      decision = 'keep_as_is';
+      worthRevising = false;
+    } else if (score >= 60) {
+      decision = 'refresh';
+      worthRevising = true;
+    } else if (score >= 35) {
+      decision = 'revise';
+      worthRevising = true;
+    } else {
+      decision = 'rewrite';
+      worthRevising = true;
+    }
+
+    const actionList = [];
+    if (titleIssue) actionList.push(
+      titleOpportunities.length
+        ? `Title'a şu sorguyu yansıt: "${titleOpportunities[0].query}"`
+        : 'Title uzunluğunu 40–65 karakter arasına getir.'
+    );
+    if (metaIssue) actionList.push('Meta description 80–165 karakter arasında yeniden yazılmalı.');
+    if (h1Issue) actionList.push(
+      h1.length === 0 ? 'H1 eksik, eklenmeli.' : `Birden fazla H1 var (${h1.length} adet), tek H1 bırakılmalı.`
+    );
+    if (contentGap) actionList.push(
+      `Yeni H2 ekle: ${addSectionsQ.slice(0, 3).map(q => `"${q.query}"`).join(', ')}`
+    );
+    if (intentMismatch) actionList.push('Soru odaklı sorgular var ama karşılığı yok — FAQ bölümü genişletilmeli.');
+    if (internalLinkGap) actionList.push(
+      `İç link eksik, ekle: ${internalLinkSuggestions.slice(0, 3).map(l => l.url).join(', ')}`
+    );
+    if (impressions === 0) actionList.push('Sayfa GSC verisinde hiç görünmüyor — indexlenme kontrolü yap.');
+    if (decision === 'merge_or_delete') actionList.push('Gösterim/tıklama sıfır — sayfa silinmeli veya benzer bir sayfayla birleştirilmeli.');
+    if (actionList.length === 0) actionList.push('Belirgin bir sorun tespit edilmedi, sayfa mevcut haliyle korunabilir.');
+
+    res.json({
+      projectContext,
+      siteUrl,
+      pageUrl,
+      period: dates,
+      performance: { clicks, impressions, ctr, avgPosition: position },
+      verdict: { decision, score, worthRevising },
+      problems: { titleIssue, metaIssue, h1Issue, contentGap, intentMismatch, internalLinkGap },
+      seo: {
+        title, titleLength: title.length,
+        metaDescription: meta, metaDescriptionLength: meta.length,
+        canonical: canon, robots,
+        h1, h1Count: h1.length, h2, h2Count: h2.length,
+        internalHrefCount,
+      },
+      queryAnalysis: {
+        keepQueries,
+        addSections: addSectionsQ,
+        dropQueries,
+        faqCandidates,
+        titleOpportunities,
+      },
+      internalLinkSuggestions,
+      actionList,
+    });
+
+  } catch (e) {
+    fail(res, e, 'REVISION-ANALYSIS');
+  }
+});
 
 // ──────────────────────────────────────────────────────────────
 // 404
