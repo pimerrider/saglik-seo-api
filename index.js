@@ -2,7 +2,7 @@
 
 /**
  * ═══════════════════════════════════════════════════════════════
- *  Multi-Site SEO API  v2.0
+ *  Multi-Site SEO API  v3.0
  *  Render üzerinde çalışır — Node.js 18+
  * ═══════════════════════════════════════════════════════════════
  *
@@ -15,15 +15,19 @@
  *    ALLOWED_DOMAINS      → turkishdishes.net,saglikliturkiye.net
  *    PORT                 → Render otomatik set eder
  *
- *  Endpointler:
- *  GET  /  /health  /routes
- *  POST /gsc-data  /gsc-pages  /gsc-query-pages
- *  POST /gsc-pages-zero-clicks  /gsc-top-pages  /gsc-page-queries
- *  POST /gsc-pages-low-ctr  /gsc-pages-position-5-20
- *  POST /ga4-pages  /ga4-traffic
- *  POST /sitemap-urls  /internal-link-suggestions
- *  POST /page-seo-audit  /page-deep-analysis
- *  POST /site-summary  /content-plan  /revision-analysis
+ *  Aktif GPT Action seti (7 endpoint):
+ *    POST /article-engine  /revision-analysis  /site-summary
+ *    POST /sitemap-urls  /internal-link-suggestions-v2
+ *    POST /project-context  /project-log
+ *
+ *  Kodda duran ama Action listesinde OLMAYAN endpointler (doğrudan
+ *  script/CLI kullanımı için, GPT bunları çağıramaz):
+ *    POST /gsc-data  /gsc-pages  /gsc-query-pages
+ *    POST /gsc-pages-zero-clicks  /gsc-top-pages  /gsc-page-queries
+ *    POST /gsc-pages-low-ctr  /gsc-pages-position-5-20
+ *    POST /ga4-pages  /ga4-traffic
+ *    POST /internal-link-suggestions (v1, v2 ile aynı mantık)
+ *    POST /page-seo-audit
  * ═══════════════════════════════════════════════════════════════
  */
 
@@ -306,7 +310,7 @@ function fail(res, err, label='ERROR') {
 // ──────────────────────────────────────────────────────────────
 
 app.get('/', (_req, res) => res.json({
-  status:'ok', service:'multi-site-seo-api', version:'2.0.0',
+  status:'ok', service:'multi-site-seo-api', version:'3.0.0',
   allowedDomains: getAllowedDomains(), time: new Date().toISOString(),
 }));
 app.get('/health', (_req, res) => res.json({
@@ -322,13 +326,14 @@ app.get('/routes', (_req, res) => res.json({ routes:[
   "POST /project-context",
   "POST /project-log",
   'POST /article-engine',
-  'POST /sitemap-urls', 'POST /internal-link-suggestions',
-  'POST /page-seo-audit', 'POST /page-deep-analysis',
-  'POST /site-summary', 'POST /content-plan', 'POST /revision-analysis',
+  'POST /sitemap-urls', 'POST /internal-link-suggestions', 'POST /internal-link-suggestions-v2',
+  'POST /page-seo-audit',
+  'POST /site-summary', 'POST /revision-analysis',
 ]}));
 
 // ──────────────────────────────────────────────────────────────
-// GSC ENDPOİNTLERİ
+// GSC ENDPOİNTLERİ  (Action listesinde DEĞİL — kod dururken doğrudan
+// script/CLI'dan çağrılabilir, GPT Actions'tan erişilemez)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/gsc-data', async (req, res) => {
@@ -454,6 +459,10 @@ app.post('/gsc-pages-position-5-20', async (req, res) => {
   } catch(e) { fail(res,e,'GSC-POSITION-5-20'); }
 });
 
+// ──────────────────────────────────────────────────────────────
+// PROJECT MEMORY (Action listesinde — kalıcı editoryal hafıza)
+// ──────────────────────────────────────────────────────────────
+
 app.post("/project-context", async (req, res) => {
   try {
     const memory = await getMemory();
@@ -495,7 +504,7 @@ app.post("/project-log", async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// GA4 ENDPOİNTLERİ
+// GA4 ENDPOİNTLERİ  (Action listesinde DEĞİL)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/ga4-pages', async (req, res) => {
@@ -549,7 +558,7 @@ app.post('/ga4-traffic', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// SİTEMAP
+// SİTEMAP (Action listesinde)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/sitemap-urls', async (req, res) => {
@@ -562,7 +571,7 @@ app.post('/sitemap-urls', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// İÇ LİNK
+// İÇ LİNK  (v2 Action listesinde, v1 sadece geriye dönük uyumluluk)
 // ──────────────────────────────────────────────────────────────
 
 async function handleInternalLinks(req, res) {
@@ -586,7 +595,7 @@ app.post('/internal-link-suggestions',    handleInternalLinks);
 app.post('/internal-link-suggestions-v2', handleInternalLinks);
 
 // ──────────────────────────────────────────────────────────────
-// SAYFA SEO AUDIT
+// SAYFA SEO AUDIT  (Action listesinde DEĞİL)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/page-seo-audit', async (req, res) => {
@@ -623,75 +632,7 @@ app.post('/page-seo-audit', async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────
-// SAYFA DERİN ANALİZ
-// ──────────────────────────────────────────────────────────────
-
-app.post('/page-deep-analysis', async (req, res) => {
-  try {
-    const { siteUrl, sitemapUrl, pageUrl, startDate, endDate, rowLimit=5000 } = req.body;
-    if (!siteUrl||!pageUrl||!startDate||!endDate)
-      return res.status(400).json({ error:'siteUrl, pageUrl, startDate, endDate zorunlu.' });
-    requireAllowed(pageUrl,'pageUrl');
-
-    const topic = slugToTitle(pageUrl).toLowerCase();
-    const [gscPages, gscQP, auditRes, sitemapUrls] = await Promise.all([
-      gscQuery({ siteUrl, startDate, endDate, dimensions:['page'], rowLimit:5000 }),
-      gscQuery({ siteUrl, startDate, endDate, dimensions:['query','page'], rowLimit }),
-      axios.get(pageUrl,{ timeout:15000, headers:{'User-Agent':'Mozilla/5.0 (compatible; SEOAuditBot/2.0)'} }),
-      sitemapUrl ? getSitemap(sitemapUrl,SITEMAP_MAX_URLS) : Promise.resolve([]),
-    ]);
-
-    const target  = normUrl(pageUrl);
-    const pageMet = gscPages.map(r=>mapRow(r,['page'])).find(r=>normUrl(r.page)===target)||{};
-    const queries = gscQP.map(r=>mapRow(r,['query','page']))
-      .filter(r=>normUrl(r.page)===target).sort((a,b)=>b.impressions-a.impressions);
-
-    const $      = cheerio.load(auditRes.data);
-    const title  = $('title').first().text().trim();
-    const meta   = $('meta[name="description"]').attr('content')?.trim()||'';
-    const canon  = $('link[rel="canonical"]').attr('href')?.trim()||'';
-    const robots = $('meta[name="robots"]').attr('content')?.trim()||'';
-    const h1     = $('h1').map((_,el)=>$(el).text().trim()).get();
-    const h2     = $('h2').map((_,el)=>$(el).text().trim()).get();
-
-    const primaryTarget      = queries.filter(q=>q.position<=5 && q.clicks>0);
-    const h2Candidates       = queries.filter(q=>q.position>5 && q.position<=20 && q.impressions>=50);
-    const faqCandidates      = queries.filter(q=>/^(how|what|can|is|why|when|does)/i.test(q.query)||q.query.includes('?'));
-    const titleOpportunities = queries.filter(q=>q.impressions>=200 && q.ctr<0.03);
-
-    const internalLinks = sitemapUrls
-      .map(item=>({ ...item, score:scoreLink(item,topic,pageUrl) }))
-      .filter(item=>item.score>0).sort((a,b)=>b.score-a.score).slice(0,8)
-      .map(({ url, titleFromSlug, score })=>({ url, titleFromSlug, score }));
-
-    const actions=[];
-    if (title.length<30||title.length>65) actions.push('Title uzunluğunu 40–65 karakter arasına getir');
-    if (titleOpportunities.length)        actions.push(`Title fırsatı: "${titleOpportunities[0].query}"`);
-    if (faqCandidates.length)             actions.push(`FAQ ekle: ${faqCandidates.slice(0,3).map(q=>`"${q.query}"`).join(', ')}`);
-    if (h2Candidates.length)              actions.push(`H2 ekle: ${h2Candidates.slice(0,2).map(q=>`"${q.query}"`).join(', ')}`);
-    if (internalLinks.length)             actions.push(`${internalLinks.length} iç link ekle`);
-    if (meta.length<80)                   actions.push('Meta description yeniden yaz (min 80 karakter)');
-
-    const projectContext = await loadProjectContextSafe();
-
-res.json({
-  projectContext,
-  pageUrl,
-  performance:{ clicks:pageMet.clicks||0, impressions:pageMet.impressions||0,
-                    ctr:pageMet.ctr||0, avgPosition:pageMet.position||0 },
-      seo:{ title, titleLength:title.length, metaDescription:meta,
-            metaDescriptionLength:meta.length, canonical:canon, robots,
-            h1, h1Count:h1.length, h2, h2Count:h2.length },
-      queries:{ total:queries.length, all:queries,
-                primaryTarget, h2Candidates, faqCandidates, titleOpportunities },
-      internalLinks,
-      actionPlan:actions,
-    });
-  } catch(e) { fail(res,e,'PAGE-DEEP-ANALYSIS'); }
-});
-
-// ──────────────────────────────────────────────────────────────
-// SİTE ÖZETİ
+// SİTE ÖZETİ  (Action listesinde)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/site-summary', async (req, res) => {
@@ -759,7 +700,7 @@ res.json({
 });
 
 // ──────────────────────────────────────────────────────────────
-// İÇERİK PLANI
+// ARTICLE ENGINE  (Action listesinde — TurkishDishes ONLY)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/article-engine', async (req, res) => {
@@ -1038,8 +979,9 @@ app.post('/article-engine', async (req, res) => {
     fail(res, e, 'ARTICLE-ENGINE');
   }
 });
+
 // ──────────────────────────────────────────────────────────────
-// REVİZYON ANALİZİ
+// REVİZYON ANALİZİ  (Action listesinde)
 // ──────────────────────────────────────────────────────────────
 
 app.post('/revision-analysis', async (req, res) => {
@@ -1220,6 +1162,6 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`SEO API v2.0 → port ${PORT}`);
+  console.log(`SEO API v3.0 → port ${PORT}`);
   console.log(`İzinli domainler: ${getAllowedDomains().join(', ')}`);
 });
