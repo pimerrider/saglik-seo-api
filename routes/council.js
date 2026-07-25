@@ -329,19 +329,28 @@ async function runLoop(sessionId, signal) {
           )
       );
 
-      const verdict = await callProvider(
-        "GPT",
-        signal,
-        (providerSignal) =>
-          judge(
-            session.mode,
-            session.topic,
-            draft,
-            session.round,
-            forceFinal,
-            providerSignal
-          )
-      );
+      let verdict;
+      try {
+        verdict = await callProvider(
+          "GPT",
+          signal,
+          (providerSignal) =>
+            judge(
+              session.mode,
+              session.topic,
+              draft,
+              session.round,
+              forceFinal,
+              providerSignal
+            )
+        );
+      } catch (error) {
+        if (forceFinal && error?.code === INVALID_VERDICT_CODE) {
+          verdict = { satisfied: true, feedback: null, missingFields: [], finalOutput: null };
+        } else {
+          throw error;
+        }
+      }
 
       if (forceFinal) {
         const verdictOutput =
@@ -373,13 +382,22 @@ async function runLoop(sessionId, signal) {
         };
       }
 
-      if (verdict.satisfied) {
-        sessions.delete(sessionId); // tamamlandı, oturumu temizle
+      const hasFinalOutput =
+        typeof verdict.finalOutput === "string" &&
+        verdict.finalOutput.trim().length > 0;
+
+      if (verdict.satisfied && hasFinalOutput) {
+        sessions.delete(sessionId);
         return {
           status: "complete",
           roundsUsed: session.round,
           finalOutput: verdict.finalOutput,
         };
+      }
+
+      if (verdict.satisfied && !hasFinalOutput && !forceFinal) {
+        judgeFeedback = "satisfied=true dendi ama finalOutput boştu, tekrar üret ve finalOutput'u doldur.";
+        continue;
       }
 
       judgeFeedback = verdict.feedback;
