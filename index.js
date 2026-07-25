@@ -1148,7 +1148,8 @@ app.post('/revision-analysis', async (req, res) => {
 // ──────────────────────────────────────────────────────────────
 // 404
 // ──────────────────────────────────────────────────────────────
-
+const councilRoutes = require("./routes/council");
+     app.use("/council", councilRoutes);
 app.use((req, res) => {
   res.status(404).json({
     error:'Endpoint bulunamadı.', path:req.path, method:req.method,
