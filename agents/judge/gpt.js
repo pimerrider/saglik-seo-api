@@ -1,6 +1,27 @@
 const OpenAI = require("openai");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const INVALID_VERDICT_CODE = "INVALID_GPT_VERDICT";
+const INVALID_VERDICT_MESSAGE = "GPT verdict could not be validated";
+
+function isValidVerdict(verdict) {
+  return Boolean(
+    verdict &&
+    typeof verdict === "object" &&
+    !Array.isArray(verdict) &&
+    typeof verdict.satisfied === "boolean" &&
+    (typeof verdict.feedback === "string" || verdict.feedback === null) &&
+    Array.isArray(verdict.missingFields) &&
+    verdict.missingFields.every((field) => typeof field === "string") &&
+    (typeof verdict.finalOutput === "string" || verdict.finalOutput === null)
+  );
+}
+
+function createInvalidVerdictError() {
+  const error = new Error(INVALID_VERDICT_MESSAGE);
+  error.code = INVALID_VERDICT_CODE;
+  return error;
+}
 
 /**
  * GPT, Gemini'nin taslağını değerlendirir. Çelişki/eksik bulur,
@@ -49,11 +70,14 @@ SADECE şu JSON formatında cevap ver, başka hiçbir şey yazma:
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
-    // Parse hatasında güvenli fallback - final'e zorla
-    parsed = { satisfied: true, feedback: null, missingFields: [], finalOutput: draft };
+    throw createInvalidVerdictError();
+  }
+
+  if (!isValidVerdict(parsed)) {
+    throw createInvalidVerdictError();
   }
 
   return parsed;
 }
 
-module.exports = { judge };
+module.exports = { judge, INVALID_VERDICT_CODE };
