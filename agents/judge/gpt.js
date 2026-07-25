@@ -33,7 +33,14 @@ function createInvalidVerdictError() {
  * @param {boolean} forceFinal - 4. turda zorla final üret
  * @returns {Promise<{satisfied: boolean, feedback: string|null, missingFields: string[], finalOutput: string|null}>}
  */
-async function judge(mode, topic, draft, round, forceFinal = false) {
+async function judge(
+  mode,
+  topic,
+  draft,
+  round,
+  forceFinal = false,
+  signal
+) {
   const systemPrompt = `
 Sen sıkı bir editör/hakemsin. Gemini'nin ürettiği taslağı değerlendiriyorsun.
 Görev tipi: ${mode}
@@ -56,14 +63,17 @@ SADECE şu JSON formatında cevap ver, başka hiçbir şey yazma:
 }
 `.trim();
 
-  const completion = await openai.chat.completions.create({
-    model: process.env.OPENAI_MODEL || "gpt-4.1",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: `Taslak (tur ${round}):\n\n${draft}` },
-    ],
-    response_format: { type: "json_object" },
-  });
+  const completion = await openai.chat.completions.create(
+    {
+      model: process.env.OPENAI_MODEL || "gpt-4.1",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: `Taslak (tur ${round}):\n\n${draft}` },
+      ],
+      response_format: { type: "json_object" },
+    },
+    { signal }
+  );
 
   const raw = completion.choices[0].message.content;
   let parsed;

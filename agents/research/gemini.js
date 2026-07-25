@@ -10,7 +10,13 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
  * @param {string|null} judgeFeedback - Önceki turdan GPT eleştirisi (varsa)
  * @returns {Promise<{draft: string, sourcesUsed: string[]}>}
  */
-async function research(mode, topic, providedData = {}, judgeFeedback = null) {
+async function research(
+  mode,
+  topic,
+  providedData = {},
+  judgeFeedback = null,
+  signal
+) {
   const model = genAI.getGenerativeModel({
     model: "gemini-2.5-pro",
     // Not: grounding (googleSearch) ilk sürümde kapalı - kullanıcı zaten kaynak/veri besliyor.
@@ -37,7 +43,7 @@ ${judgeFeedback ? `\nÖnceki tur eleştirisi (bunu dikkate alarak düzelt):\n${j
 Sadece taslağı/analizi ver, ek açıklama yapma.
 `.trim();
 
-  const result = await model.generateContent(prompt);
+  const result = await model.generateContent(prompt, { signal });
   const text = result.response.text();
 
   return { draft: text };
