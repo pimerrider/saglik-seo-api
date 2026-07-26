@@ -18,7 +18,7 @@ async function research(
   signal
 ) {
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-pro",
+    model: process.env.GEMINI_MODEL || "gemini-3.6-flash",
     // Not: grounding (googleSearch) ilk sürümde kapalı - kullanıcı zaten kaynak/veri besliyor.
     // İhtiyaç olursa: tools: [{ googleSearch: {} }] eklenir (ücretli tier gerektirir).
   });
