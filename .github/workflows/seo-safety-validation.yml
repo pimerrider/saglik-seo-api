@@ -1,0 +1,35 @@
+name: SEO safety validation
+on:
+  push:
+    branches: [seo-safety-fix]
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Parse JavaScript (no network calls)
+        run: |
+          node --check index.js
+          node --check routes/council.js
+          node --check agents/judge/gpt.js
+          node --check agents/research/gemini.js
+      - name: Check safety guards are present
+        run: |
+          node - <<'NODE'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const code = fs.readFileSync('index.js', 'utf8');
+          assert.match(code, /decision = 'needs_investigation'/);
+          assert.match(code, /normalizedPagePath\(r\.page\)/);
+          assert.doesNotMatch(code, /decision = 'merge_or_delete'/);
+          console.log('SEO safety guard checks passed');
+          NODE
