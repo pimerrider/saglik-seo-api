@@ -130,6 +130,16 @@ function safeLimit(v, fallback, max) {
   return isFinite(n) && n > 0 ? Math.min(n, max) : fallback;
 }
 function normUrl(u) { return String(u || '').trim().toLowerCase().replace(/\/$/, ''); }
+function normalizedPagePath(value) {
+  // GSC URL and GA4 landingPagePlusQueryString -> same pathname; query stripped.
+  // GA4 may return '(not set)' or a missing value, which are not page evidence.
+  if (!value || value === '(not set)') return '';
+  try {
+    const u = new URL(String(value).trim(), 'https://example.invalid');
+    const path = decodeURI(u.pathname).toLowerCase().replace(/\/+$/, '');
+    return path || '/';
+  } catch { return ''; }
+}
 function normText(s = '') {
   return String(s).toLowerCase()
     .replace(/ı/g,'i').replace(/ğ/g,'g').replace(/ü/g,'u')
@@ -676,9 +686,9 @@ app.post('/site-summary', async (req, res) => {
     let gscOnly=[];
     if (ga4Result) {
       const ga4Urls = new Set(ga4Result.rows
-        .map(r=>normUrl(r.dimensionValues?.[0]?.value||'')).filter(Boolean));
-      gscOnly = content.filter(r=>r.clicks>10&&!ga4Urls.has(normUrl(r.page)))
-        .slice(0,10).map(r=>({ ...r, note:'GSC tıklaması var ama GA4 oturumu yok' }));
+        .map(r=>normalizedPagePath(r.dimensionValues?.[0]?.value||'')).filter(Boolean));
+      gscOnly = content.filter(r=>r.clicks>10&&!ga4Urls.has(normalizedPagePath(r.page)))
+        .slice(0,10).map(r=>({ ...r, note:'GSC tıklaması var; GA4 raporunun ilk 500 landing page satırında eşleşme yok (sıfır oturum kanıtı değildir)' }));
     }
 
     const projectContext = await loadProjectContextSafe();
@@ -1072,13 +1082,13 @@ app.post('/revision-analysis', async (req, res) => {
     if (impressions >= 200 && ctr < 0.02 && clicks > 0) score -= 10; // düşük CTR
     if (impressions >= 20 && clicks === 0)              score -= 15; // gösterim var, tıklama yok
     if (position > 20 && impressions > 0)               score -= 10; // zayıf pozisyon
-    if (impressions === 0)                               score -= 20; // GSC'de hiç görünmüyor
+    // GSC'de veri olmamasi tek basina kalite veya indekslenme kaniti degildir.
     score = Math.max(0, Math.min(100, score));
 
     let decision, worthRevising;
     if (impressions === 0 && clicks === 0) {
-      decision = 'merge_or_delete';
-      worthRevising = true;
+      decision = 'needs_investigation';
+      worthRevising = false;
     } else if (score >= 80) {
       decision = 'keep_as_is';
       worthRevising = false;
@@ -1111,7 +1121,7 @@ app.post('/revision-analysis', async (req, res) => {
       `İç link eksik, ekle: ${internalLinkSuggestions.slice(0, 3).map(l => l.url).join(', ')}`
     );
     if (impressions === 0) actionList.push('Sayfa GSC verisinde hiç görünmüyor — indexlenme kontrolü yap.');
-    if (decision === 'merge_or_delete') actionList.push('Gösterim/tıklama sıfır — sayfa silinmeli veya benzer bir sayfayla birleştirilmeli.');
+    if (decision === 'needs_investigation') actionList.push('GSC kaydı bulunmadı: indekslenme, yayın tarihi, canonical, veri kapsamı ve içerik kalitesini kontrol et. Sadece bu nedenle silme/birleştirme kararı verme.');
     if (actionList.length === 0) actionList.push('Belirgin bir sorun tespit edilmedi, sayfa mevcut haliyle korunabilir.');
 
     res.json({
