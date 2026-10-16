@@ -4,9 +4,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const code = fs.readFileSync(require('node:path').join(__dirname, '..', 'index.js'), 'utf8');
+// GitHub checkout can preserve Windows CRLF; normalize only for source extraction.
+const source = code.replace(/\r\n/g, '\n');
 
 // Exercise the actual production function, not a reimplementation.
-const fnSource = code.match(/function normalizedPagePath\(value\) \{[\s\S]*?\n\}/)?.[0];
+const fnSource = source.match(/function normalizedPagePath\(value\) \{[\s\S]*?\n\}/)?.[0];
 assert.ok(fnSource, 'normalizedPagePath source missing');
 const normalize = vm.runInNewContext(fnSource + '\nnormalizedPagePath;', { URL, decodeURI });
 
@@ -24,7 +26,7 @@ test('missing GA4 path does not become a real page', () => {
   assert.equal(normalize(''), '');
 });
 
-const verdictSource = code.match(/if \(impressions === 0 && clicks === 0\) \{[\s\S]*?\n    \}\n\n    const actionList/)?.[0];
+const verdictSource = source.match(/if \(impressions === 0 && clicks === 0\) \{[\s\S]*?\n    \}\n\n    const actionList/)?.[0];
 assert.ok(verdictSource, 'revision decision block missing');
 const decisionCode = verdictSource.replace(/\n\n    const actionList$/, '');
 const choose = new Function('impressions', 'clicks', 'score',
