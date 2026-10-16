@@ -22,6 +22,8 @@ jobs:
           node --check routes/council.js
           node --check agents/judge/gpt.js
           node --check agents/research/gemini.js
+      - name: Run SEO behavioral tests
+        run: node --test test/seo-safety.test.js
       - name: Check safety guards are present
         run: |
           node - <<'NODE'
