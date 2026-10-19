@@ -65,7 +65,7 @@ async function requireAuth(req, res, next) {
     if (typeof payload.sub !== 'string' || payload.sub !== ALLOWED_SUB) {
       return rejectOAuth(res, 403, 'insufficient_scope', 'Account not authorized');
     }
-    const scopes = String(payload.scope || '').split(/\\s+/);
+    const scopes = String(payload.scope || '').split(/\s+/);
     if (!scopes.includes('read:seo')) {
       return rejectOAuth(res, 403, 'insufficient_scope', 'read:seo permission required');
     }
