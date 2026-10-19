@@ -1,0 +1,19 @@
+name: TurkishDishes MCP OAuth validation
+on:
+  push:
+    branches: [turkishdishes-mcp-bridge]
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: turkishdishes-mcp-bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: node --check server.js
+      - run: node --test test/oauth-guard.test.js
