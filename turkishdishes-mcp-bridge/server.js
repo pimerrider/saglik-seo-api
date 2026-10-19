@@ -1,13 +1,18 @@
 import express from 'express';
-import { timingSafeEqual } from 'node:crypto';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const API_BASE = 'https://saglik-seo-api-1.onrender.com';
-const BRIDGE_TOKEN = process.env.MCP_BRIDGE_TOKEN;
-if (!BRIDGE_TOKEN || BRIDGE_TOKEN.length < 32) throw new Error('Set MCP_BRIDGE_TOKEN (32+ characters)');
+const AUTH0_ISSUER = 'https://dev-r38bhp2ua51avnhr.us.auth0.com/';
+const RESOURCE = 'https://turkishdishes-seo-mcp-bridge.onrender.com';
+const RESOURCE_METADATA = RESOURCE + '/.well-known/oauth-protected-resource/mcp';
+const ALLOWED_SUB = process.env.AUTH0_ALLOWED_SUB;
+if (!ALLOWED_SUB || !ALLOWED_SUB.trim()) throw new Error('Set AUTH0_ALLOWED_SUB before OAuth deployment');
+const JWKS = createRemoteJWKSet(new URL(AUTH0_ISSUER + '.well-known/jwks.json'));
+const AUTHORIZATION_SERVER = AUTH0_ISSUER.slice(0, -1);
 const SITE = 'https://turkishdishes.net/';
 const SITEMAP = 'https://turkishdishes.net/sitemap_index.xml';
 
@@ -23,16 +28,52 @@ const app = express();
 app.disable('x-powered-by');
 app.use(express.json({ limit: '32kb' }));
 
-function authed(req) {
-  const auth = req.get('authorization') ?? '';
-  if (!auth.startsWith('Bearer ')) return false;
-  const candidate = Buffer.from(auth.slice(7));
-  const expected = Buffer.from(BRIDGE_TOKEN);
-  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
+app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+  res.json({
+    resource: RESOURCE,
+    authorization_servers: [AUTHORIZATION_SERVER],
+    scopes_supported: ['read:seo'],
+    bearer_methods_supported: ['header']
+  });
+});
+app.get('/.well-known/oauth-protected-resource', (_req, res) => {
+  res.json({
+    resource: RESOURCE,
+    authorization_servers: [AUTHORIZATION_SERVER],
+    scopes_supported: ['read:seo'],
+    bearer_methods_supported: ['header']
+  });
+});
+
+function rejectOAuth(res, status, error, description) {
+  const challenge = [
+    'Bearer realm="TurkishDishes SEO"',
+    'resource_metadata="' + RESOURCE_METADATA + '"',
+    'error="' + error + '"',
+    'error_description="' + description + '"'
+  ].join(', ');
+  return res.status(status).set('WWW-Authenticate', challenge).json({ error, error_description: description });
 }
-function requireAuth(req, res, next) {
-  if (!authed(req)) return res.status(401).json({ error: 'Unauthorized' });
-  next();
+async function requireAuth(req, res, next) {
+  const auth = req.get('authorization') || '';
+  if (!auth.startsWith('Bearer ')) return rejectOAuth(res, 401, 'invalid_token', 'Access token required');
+  try {
+    const { payload } = await jwtVerify(auth.slice(7), JWKS, {
+      issuer: AUTH0_ISSUER, audience: RESOURCE, algorithms: ['RS256'],
+      clockTolerance: 30
+    });
+    if (typeof payload.sub !== 'string' || payload.sub !== ALLOWED_SUB) {
+      return rejectOAuth(res, 403, 'insufficient_scope', 'Account not authorized');
+    }
+    const scopes = String(payload.scope || '').split(/\\s+/);
+    if (!scopes.includes('read:seo')) {
+      return rejectOAuth(res, 403, 'insufficient_scope', 'read:seo permission required');
+    }
+    req.auth = { subject: payload.sub, scopes };
+    return next();
+  } catch {
+    return rejectOAuth(res, 401, 'invalid_token', 'Invalid or expired access token');
+  }
 }
 
 async function upstream(path, payload) {
