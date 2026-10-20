@@ -42,3 +42,9 @@ test('regular scoring branches are preserved', () => {
   assert.equal(choose(250, 12, 45).decision, 'revise');
   assert.equal(choose(250, 12, 25).decision, 'rewrite');
 });
+
+test('site summary distinguishes sampled GSC rows from indexed pages', () => {
+  assert.match(source, /gscPageRowCount:content\.length/);
+  assert.match(source, /indexedPageCount is a legacy alias of gscPageRowCount/);
+  assert.match(source, /Dead pages here means sitemap URLs absent from the sampled GSC page rows/);
+});
