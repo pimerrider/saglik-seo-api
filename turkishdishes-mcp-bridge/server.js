@@ -26,6 +26,12 @@ function sitePage(value) {
 
 const app = express();
 app.disable('x-powered-by');
+// Safe MCP diagnostics: never log Authorization headers, tokens, or request bodies.
+app.use('/mcp', (req, res, next) => {
+  const started = Date.now();
+  res.on('finish', () => console.info('mcp_request', JSON.stringify({ method: req.method, status: res.statusCode, elapsedMs: Date.now() - started })));
+  next();
+});
 app.use(express.json({ limit: '32kb' }));
 
 app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
@@ -56,22 +62,26 @@ function rejectOAuth(res, status, error, description) {
 }
 async function requireAuth(req, res, next) {
   const auth = req.get('authorization') || '';
-  if (!auth.startsWith('Bearer ')) return rejectOAuth(res, 401, 'invalid_token', 'Access token required');
+  if (!auth.startsWith('Bearer ')) { console.warn('mcp_auth', 'missing_bearer'); return rejectOAuth(res, 401, 'invalid_token', 'Access token required'); }
   try {
     const { payload } = await jwtVerify(auth.slice(7), JWKS, {
       issuer: AUTH0_ISSUER, audience: RESOURCE, algorithms: ['RS256'],
       clockTolerance: 30
     });
     if (typeof payload.sub !== 'string' || payload.sub !== ALLOWED_SUB) {
+      console.warn('mcp_auth', 'subject_not_allowed');
       return rejectOAuth(res, 403, 'insufficient_scope', 'Account not authorized');
     }
     const scopes = String(payload.scope || '').split(/\s+/);
     if (!scopes.includes('read:seo')) {
+      console.warn('mcp_auth', 'scope_missing');
       return rejectOAuth(res, 403, 'insufficient_scope', 'read:seo permission required');
     }
+    console.info('mcp_auth', 'ok');
     req.auth = { subject: payload.sub, scopes };
     return next();
-  } catch {
+  } catch (err) {
+    console.warn('mcp_auth', 'jwt_invalid', err?.code || 'unknown');
     return rejectOAuth(res, 401, 'invalid_token', 'Invalid or expired access token');
   }
 }
@@ -128,6 +138,8 @@ function makeServer() {
 }
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'turkishdishes-mcp-bridge' }));
+// An HTTP GET without an SSE stream is optional for stateless MCP; advertise unsupported polling as 405.
+app.get('/mcp', requireAuth, (_req, res) => res.status(405).set('Allow', 'POST').end());
 app.post('/mcp', requireAuth, async (req, res) => {
   const server = makeServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -138,7 +150,8 @@ app.post('/mcp', requireAuth, async (req, res) => {
   try {
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
-  } catch {
+  } catch (err) {
+    console.error('mcp_transport_error', err?.name || 'unknown', err?.message || 'unknown');
     if (!res.headersSent) {
       res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'MCP error' }, id: null });
     }
