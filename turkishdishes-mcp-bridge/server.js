@@ -97,7 +97,15 @@ async function upstream(path, payload) {
       signal: controller.signal
     });
     const data = await result.text();
-    if (!result.ok) throw new Error('Upstream returned HTTP ' + result.status);
+    if (!result.ok) {
+      const retryAfter = result.headers.get('retry-after');
+      console.warn('upstream_http_error', JSON.stringify({
+        endpoint: path,
+        status: result.status,
+        retryAfter: retryAfter ? retryAfter.slice(0, 50) : null
+      }));
+      throw new Error('Upstream returned HTTP ' + result.status + (retryAfter ? ' (Retry-After: ' + retryAfter.slice(0, 50) + ')' : ''));
+    }
     try { return JSON.parse(data); } catch { throw new Error('Upstream response is not JSON'); }
   } finally {
     clearTimeout(timer);
