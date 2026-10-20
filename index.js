@@ -701,7 +701,15 @@ res.json({
         totalClicks, totalImpressions,
         avgCtr:parseFloat(avgCtr.toFixed(4)),
         avgPosition:parseFloat(avgPosition.toFixed(1)),
-        indexedPageCount:content.length, sitemapUrlCount:sitemapUrls.length,
+        indexedPageCount:content.length, // Legacy field: actually GSC page rows, NOT verified indexed pages.
+        gscPageRowCount:content.length,
+        sitemapUrlCount:sitemapUrls.length,
+        dataQualityNotes:[
+          'indexedPageCount is a legacy alias of gscPageRowCount; it is NOT a Google indexing count.',
+          'sitemapUrlCount includes duplicate URL entries and non-recipe pages.',
+          'GSC data for recent dates can be incomplete; do not interpret current-day values as final.',
+          'Dead pages here means sitemap URLs absent from the sampled GSC page rows, not HTTP 404 pages.'
+        ],
       },
       segments:{ winners, lowCtrPages:lowCtr, opportunityPages:opps,
                  zeroClickPages:zero, deadPages:dead, gscOnlyPages:gscOnly },
