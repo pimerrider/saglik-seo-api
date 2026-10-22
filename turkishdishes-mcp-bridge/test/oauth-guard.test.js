@@ -26,3 +26,21 @@ test('API and sitemap stay pinned to TurkishDishes', () => {
   assert.match(src, /https:\/\/turkishdishes\.net\/sitemap_index\.xml/);
   assert.match(src, /sitePage\(a\.pageUrl\)/);
 });
+
+test('rate-limit protection has bounded cache and in-flight deduplication', () => {
+  assert.match(src, /const RESPONSE_CACHE = new Map\(\)/);
+  assert.match(src, /const IN_FLIGHT = new Map\(\)/);
+  assert.match(src, /const BACKOFF_UNTIL = new Map\(\)/);
+  assert.match(src, /const MAX_CACHE_ENTRIES = 80/);
+  assert.match(src, /RESPONSE_CACHE\.size > MAX_CACHE_ENTRIES/);
+  assert.match(src, /if \(IN_FLIGHT\.has\(key\)\)/);
+  assert.match(src, /result\.status === 429/);
+});
+test('stale data is transparently marked and never represented as live', () => {
+  assert.match(src, /status: 'stale'/);
+  assert.match(src, /revalidation required before publication/);
+  assert.match(src, /status,/);
+  assert.match(src, /fetchedAt: new Date\(cachedAt\)\.toISOString\(\)/);
+  assert.match(src, /const STALE_WINDOW_MS = 6 \* 60 \* 60_000/);
+  assert.match(src, /return withCacheMetadata\(data, fetchedAt, 'live'\)/);
+});
