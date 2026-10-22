@@ -86,30 +86,104 @@ async function requireAuth(req, res, next) {
   }
 }
 
-async function upstream(path, payload) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 45000);
-  try {
-    const result = await fetch(API_BASE + path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
-    const data = await result.text();
-    if (!result.ok) {
-      const retryAfter = result.headers.get('retry-after');
-      console.warn('upstream_http_error', JSON.stringify({
-        endpoint: path,
-        status: result.status,
-        retryAfter: retryAfter ? retryAfter.slice(0, 50) : null
-      }));
-      throw new Error('Upstream returned HTTP ' + result.status + (retryAfter ? ' (Retry-After: ' + retryAfter.slice(0, 50) + ')' : ''));
+// Volatile read-only cache: never persist OAuth tokens, GSC payloads, or site data to disk.
+// Cached data is explicitly marked. On a transient upstream failure, stale results are
+// returned only within the bounded stale window and NEVER described as live/current.
+const RESPONSE_CACHE = new Map();
+const IN_FLIGHT = new Map();
+const BACKOFF_UNTIL = new Map();
+const TTL_MS = {
+  '/sitemap-urls': 30 * 60_000,
+  '/project-context': 10 * 60_000,
+  '/internal-link-suggestions-v2': 15 * 60_000,
+  '/article-engine': 5 * 60_000,
+  '/revision-analysis': 5 * 60_000,
+  '/site-summary': 5 * 60_000
+};
+const STALE_WINDOW_MS = 6 * 60 * 60_000;
+const RATE_LIMIT_COOLDOWN_MS = 2 * 60_000;
+const MAX_CACHE_ENTRIES = 80;
+
+function cacheKey(path, payload) {
+  return JSON.stringify([path, payload]);
+}
+function withCacheMetadata(data, cachedAt, status, cause) {
+  return {
+    ...data,
+    _bridgeCache: {
+      status,
+      fetchedAt: new Date(cachedAt).toISOString(),
+      ageSeconds: Math.max(0, Math.floor((Date.now() - cachedAt) / 1000)),
+      ...(cause ? { warning: cause } : {})
     }
-    try { return JSON.parse(data); } catch { throw new Error('Upstream response is not JSON'); }
-  } finally {
-    clearTimeout(timer);
+  };
+}
+function trimCache() {
+  while (RESPONSE_CACHE.size > MAX_CACHE_ENTRIES) {
+    RESPONSE_CACHE.delete(RESPONSE_CACHE.keys().next().value);
   }
+}
+function fromCache(entry, status, warning) {
+  return withCacheMetadata(entry.data, entry.cachedAt, status, warning);
+}
+async function upstream(path, payload) {
+  const key = cacheKey(path, payload);
+  const now = Date.now();
+  const entry = RESPONSE_CACHE.get(key);
+  const ttl = TTL_MS[path] ?? 5 * 60_000;
+  if (entry && now - entry.cachedAt < ttl) return fromCache(entry, 'fresh_cache');
+  if (IN_FLIGHT.has(key)) return IN_FLIGHT.get(key);
+
+  const task = (async () => {
+    const cached = RESPONSE_CACHE.get(key);
+    const blockedUntil = BACKOFF_UNTIL.get(path) ?? 0;
+    if (Date.now() < blockedUntil) {
+      if (cached && Date.now() - cached.cachedAt < STALE_WINDOW_MS) {
+        return fromCache(cached, 'stale', 'Upstream HTTP 429 cooldown: not current; revalidation required before publication');
+      }
+      throw new Error('Upstream HTTP 429 cooldown active; no verified current data available');
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45_000);
+    try {
+      const result = await fetch(API_BASE + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      if (!result.ok) {
+        const retryAfter = result.headers.get('retry-after');
+        console.warn('upstream_http_error', JSON.stringify({
+          endpoint: path,
+          status: result.status,
+          retryAfter: retryAfter ? retryAfter.slice(0, 50) : null,
+          contentType: (result.headers.get('content-type') || '').slice(0, 80),
+          server: (result.headers.get('server') || '').slice(0, 60)
+        }));
+        if (result.status === 429) BACKOFF_UNTIL.set(path, Date.now() + RATE_LIMIT_COOLDOWN_MS);
+        throw new Error('Upstream returned HTTP ' + result.status + (retryAfter ? ' (Retry-After: ' + retryAfter.slice(0, 50) + ')' : ''));
+      }
+      const data = await result.json();
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Unexpected upstream JSON shape');
+      const fetchedAt = Date.now();
+      RESPONSE_CACHE.set(key, { data, cachedAt: fetchedAt });
+      trimCache();
+      BACKOFF_UNTIL.delete(path);
+      return withCacheMetadata(data, fetchedAt, 'live');
+    } catch (error) {
+      const fallback = RESPONSE_CACHE.get(key);
+      if (fallback && Date.now() - fallback.cachedAt < STALE_WINDOW_MS) {
+        console.warn('upstream_stale_fallback', JSON.stringify({ endpoint: path, ageSeconds: Math.floor((Date.now() - fallback.cachedAt) / 1000) }));
+        return fromCache(fallback, 'stale', 'Upstream unavailable (' + String(error.message || error).slice(0, 90) + '); not current; revalidation required before publication');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  IN_FLIGHT.set(key, task);
+  try { return await task; } finally { IN_FLIGHT.delete(key); }
 }
 
 function makeServer() {
