@@ -44,3 +44,14 @@ test('stale data is transparently marked and never represented as live', () => {
   assert.match(src, /const STALE_WINDOW_MS = 6 \* 60 \* 60_000/);
   assert.match(src, /return withCacheMetadata\(data, fetchedAt, 'live'\)/);
 });
+
+test('website sitemap fallback is bounded and explicitly source-labeled', () => {
+  assert.match(src, /const MAX_SITEMAP_DOCUMENTS = 30/);
+  assert.match(src, /const MAX_SITEMAP_URLS = 10_000/);
+  assert.match(src, /const SITEMAP_FETCH_TIMEOUT_MS = 12_000/);
+  assert.match(src, /verificationSource: 'website_xml'/);
+  assert.match(src, /status: 'live_direct_sitemap'/);
+  assert.match(src, /Main SEO API unavailable/);
+  assert.match(src, /name !== 'get_sitemap_urls'/);
+  assert.match(src, /directSitemapVerification\(args\.maxUrls\)/);
+});
