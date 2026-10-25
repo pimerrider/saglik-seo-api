@@ -1,4 +1,5 @@
 import express from 'express';
+import { readFileSync } from 'node:fs';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -236,6 +237,29 @@ async function directSitemapVerification(maxUrls = MAX_SITEMAP_URLS) {
   };
 }
 
+function snapshotSitemapVerification(maxUrls = MAX_SITEMAP_URLS) {
+  const snapshot = JSON.parse(readFileSync(new URL('./data/sitemap-snapshot.json', import.meta.url), 'utf8'));
+  const capturedAt = new Date(snapshot.capturedAt);
+  if (!Number.isFinite(capturedAt.getTime()) || snapshot.verificationSource !== 'website_xml' || !Array.isArray(snapshot.urls)) {
+    throw new Error('Bundled sitemap snapshot is invalid');
+  }
+  const urls = [...new Set(snapshot.urls.filter(value => {
+    try { return sitePage(value) === value; } catch { return false; }
+  }))].slice(0, Math.min(maxUrls, MAX_SITEMAP_URLS));
+  if (!urls.length) throw new Error('Bundled sitemap snapshot contains no valid URLs');
+  return {
+    sitemapUrl: SITEMAP, domain: 'turkishdishes.net', count: urls.length,
+    urls: urls.map(url => ({ url })),
+    _bridgeCache: {
+      status: 'stale_snapshot',
+      fetchedAt: capturedAt.toISOString(),
+      ageSeconds: Math.max(0, Math.floor((Date.now() - capturedAt.getTime()) / 1000)),
+      verificationSource: 'bundled_snapshot',
+      warning: 'Both main SEO API and live website XML unavailable. Archived membership is NOT current; must revalidate before publication.'
+    }
+  };
+}
+
 function makeServer() {
   const server = new McpServer({ name: 'turkishdishes-seo', version: '0.1.0' });
   function add(name, description, shape, path, normalize) {
@@ -247,7 +271,12 @@ function makeServer() {
         } catch (upstreamError) {
           if (name !== 'get_sitemap_urls') throw upstreamError;
           console.warn('sitemap_direct_fallback', String(upstreamError.message || upstreamError).slice(0,100));
-          data = await directSitemapVerification(args.maxUrls);
+          try {
+            data = await directSitemapVerification(args.maxUrls);
+          } catch (directError) {
+            console.warn('sitemap_snapshot_fallback', String(directError.message || directError).slice(0,100));
+            data = snapshotSitemapVerification(args.maxUrls);
+          }
         }
         return { content: [{ type: 'text', text: JSON.stringify(data) }] };
       } catch (error) {
