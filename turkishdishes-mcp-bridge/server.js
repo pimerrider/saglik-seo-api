@@ -186,12 +186,69 @@ async function upstream(path, payload) {
   try { return await task; } finally { IN_FLIGHT.delete(key); }
 }
 
+/*
+ * Independent sitemap verification fallback:
+ * The primary SEO API is ALWAYS attempted first. If it fails, a bounded,
+ * recursive read of the public Rank Math XML sitemap is tried. This does
+ * not replace GSC checks or imply that the main API has recovered.
+ */
+const SITEMAP_FETCH_TIMEOUT_MS = 12_000;
+const MAX_SITEMAP_DOCUMENTS = 30;
+const MAX_SITEMAP_URLS = 10_000;
+function extractLocs(xml) {
+  return [...xml.matchAll(/<loc(?:\\s[^>]*)?>([^<]+)<\\/loc>/gi)]
+    .map(m => m[1].trim().replaceAll('&amp;', '&'));
+}
+async function directSitemapVerification(maxUrls = MAX_SITEMAP_URLS) {
+  const queue = [SITEMAP];
+  const visited = new Set();
+  const pages = new Set();
+  while (queue.length && visited.size < MAX_SITEMAP_DOCUMENTS && pages.size < Math.min(maxUrls, MAX_SITEMAP_URLS)) {
+    const next = queue.shift();
+    if (visited.has(next)) continue;
+    visited.add(next);
+    const u = new URL(next);
+    if (u.protocol !== 'https:' || !['turkishdishes.net', 'www.turkishdishes.net'].includes(u.hostname)) throw new Error('Sitemap redirect URL outside permitted domain');
+    const response = await fetch(next, { headers: { Accept: 'application/xml, text/xml' }, signal: AbortSignal.timeout(SITEMAP_FETCH_TIMEOUT_MS), redirect: 'manual' });
+    if (!response.ok) throw new Error('Direct website sitemap HTTP ' + response.status);
+    const xml = await response.text();
+    if (xml.length > 6_000_000) throw new Error('Sitemap XML exceeds safe size limit');
+    if (!/<(?:\\w+:)?(?:sitemapindex|urlset)\\b/i.test(xml)) throw new Error('Sitemap XML root invalid');
+    const isIndex = /<(?:\\w+:)?sitemapindex\\b/i.test(xml);
+    for (const loc of extractLocs(xml)) {
+      const parsed = new URL(loc);
+      if (parsed.protocol !== 'https:' || !['turkishdishes.net', 'www.turkishdishes.net'].includes(parsed.hostname) || parsed.username || parsed.password) continue;
+      if (isIndex) {
+        if (parsed.pathname.endsWith('.xml') && !visited.has(parsed.href)) queue.push(parsed.href);
+      } else {
+        pages.add(parsed.href);
+        if (pages.size >= Math.min(maxUrls, MAX_SITEMAP_URLS)) break;
+      }
+    }
+  }
+  if (!pages.size) throw new Error('No independently verifiable sitemap URLs found');
+  return {
+    sitemapUrl: SITEMAP,
+    domain: 'turkishdishes.net',
+    count: pages.size,
+    urls: [...pages].map(url => ({ url })),
+    _bridgeCache: { status: 'live_direct_sitemap', fetchedAt: new Date().toISOString(), ageSeconds: 0, verificationSource: 'website_xml', warning: 'Main SEO API unavailable. Only sitemap URL membership verified directly; GSC and article-engine unavailable.' }
+  };
+}
+
 function makeServer() {
   const server = new McpServer({ name: 'turkishdishes-seo', version: '0.1.0' });
   function add(name, description, shape, path, normalize) {
     server.tool(name, description, shape, async (args) => {
       try {
-        const data = await upstream(path, normalize(args));
+        let data;
+        try {
+          data = await upstream(path, normalize(args));
+        } catch (upstreamError) {
+          if (name !== 'get_sitemap_urls') throw upstreamError;
+          console.warn('sitemap_direct_fallback', String(upstreamError.message || upstreamError).slice(0,100));
+          data = await directSitemapVerification(args.maxUrls);
+        }
         return { content: [{ type: 'text', text: JSON.stringify(data) }] };
       } catch (error) {
         return { isError: true, content: [{ type: 'text', text: String(error.message ?? error) }] };
