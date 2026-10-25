@@ -55,3 +55,11 @@ test('website sitemap fallback is bounded and explicitly source-labeled', () => 
   assert.match(src, /name !== 'get_sitemap_urls'/);
   assert.match(src, /directSitemapVerification\(args\.maxUrls\)/);
 });
+
+test('archived sitemap provenance and publication warning are explicit', () => {
+  assert.match(src, /sitemap-snapshot\.json/);
+  assert.match(src, /status: 'stale_snapshot'/);
+  assert.match(src, /verificationSource: 'bundled_snapshot'/);
+  assert.match(src, /Archived membership is NOT current/);
+  assert.match(src, /snapshotSitemapVerification\(args\.maxUrls\)/);
+});
