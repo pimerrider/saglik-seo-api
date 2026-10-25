@@ -196,7 +196,7 @@ const SITEMAP_FETCH_TIMEOUT_MS = 12_000;
 const MAX_SITEMAP_DOCUMENTS = 30;
 const MAX_SITEMAP_URLS = 10_000;
 function extractLocs(xml) {
-  return [...xml.matchAll(/<loc(?:\\s[^>]*)?>([^<]+)<\\/loc>/gi)]
+  return [...xml.matchAll(/<loc(?:\s[^>]*)?>([^<]+)<\/loc>/gi)]
     .map(m => m[1].trim().replaceAll('&amp;', '&'));
 }
 async function directSitemapVerification(maxUrls = MAX_SITEMAP_URLS) {
@@ -213,8 +213,8 @@ async function directSitemapVerification(maxUrls = MAX_SITEMAP_URLS) {
     if (!response.ok) throw new Error('Direct website sitemap HTTP ' + response.status);
     const xml = await response.text();
     if (xml.length > 6_000_000) throw new Error('Sitemap XML exceeds safe size limit');
-    if (!/<(?:\\w+:)?(?:sitemapindex|urlset)\\b/i.test(xml)) throw new Error('Sitemap XML root invalid');
-    const isIndex = /<(?:\\w+:)?sitemapindex\\b/i.test(xml);
+    if (!/<(?:\w+:)?(?:sitemapindex|urlset)\b/i.test(xml)) throw new Error('Sitemap XML root invalid');
+    const isIndex = /<(?:\w+:)?sitemapindex\b/i.test(xml);
     for (const loc of extractLocs(xml)) {
       const parsed = new URL(loc);
       if (parsed.protocol !== 'https:' || !['turkishdishes.net', 'www.turkishdishes.net'].includes(parsed.hostname) || parsed.username || parsed.password) continue;
