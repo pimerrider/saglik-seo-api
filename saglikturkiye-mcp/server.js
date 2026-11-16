@@ -145,8 +145,8 @@ function serverFactory(){
  add('verify_page','Fetch the real health-site HTML and verify its title, H1 and canonical. Read-only.',{url:z.string().url()},a=>inspect(a.url));
  add('read_article','Read published health article body text from live public HTML. Read-only; no WordPress credentials.',{url:z.string().url(),maxChars:z.number().int().min(2000).max(100000).optional()},a=>readArticle(a.url,a.maxChars||80000));
  add('gsc_report','Read real Search Console queries or pages for saglikliturkiye.net via authorized existing SEO API. No write access.',{
-  startDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
-  endDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   view:z.enum(['queries','pages']).optional(),
   property:z.enum(['url_prefix','domain']).optional()
  },async a=>{
@@ -158,8 +158,8 @@ function serverFactory(){
   });
  });
  add('ga4_report','Read GA4 page-level or traffic reports from the existing SEO API. GA4 numeric property ID is required. Read-only.',{
-  propertyId:z.string().regex(/^\\d{5,20}$/),startDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
-  endDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  propertyId:z.string().regex(/^\d{5,20}$/),startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   view:z.enum(['pages','traffic']).optional()
  },async a=>{
   if(a.startDate>a.endDate)throw Error('startDate must not exceed endDate');
