@@ -63,7 +63,7 @@ async function siteMap(limit=MAX_URLS) {
     source='main_seo_api';
   } catch(e) {
     warning='Main SEO API unavailable: '+String(e.message).slice(0,120);
-    const queue=[SITE+'sitemap_index.xml',SITE+'wp-sitemap.xml']; const visited=new Set(), found=new Set();
+    const queue=[SITE+'sitemap_index.xml',SITE+'post-sitemap1.xml',SITE+'post-sitemap2.xml',SITE+'wp-sitemap.xml']; const visited=new Set(), found=new Set();
     while(queue.length && visited.size<MAX_XML_DOCS && found.size<MAX_URLS) {
       const url=queue.shift(); if(visited.has(url)) continue; visited.add(url);
       let xml; try {xml=await fetchText(url,'application/xml,text/xml')} catch {continue}
