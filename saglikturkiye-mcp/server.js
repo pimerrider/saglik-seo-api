@@ -63,8 +63,8 @@ async function siteMap(limit=MAX_URLS) {
     visited.add(url);
     let xml;
     try{xml=await fetchText(url,'application/xml,text/xml')}catch{continue}
-    const isIndex=/<(?:\\w+:)?sitemapindex\\b/i.test(xml);
-    if(!isIndex && !/<(?:\\w+:)?urlset\\b/i.test(xml))continue;
+    const isIndex=/<(?:\w+:)?sitemapindex\b/i.test(xml);
+    if(!isIndex && !/<(?:\w+:)?urlset\b/i.test(xml))continue;
     for(const loc of xmlLocs(xml)){
       let valid;try{valid=permitted(loc)}catch{continue}
       if(isIndex){
@@ -110,11 +110,11 @@ async function readArticle(url,maxChars=80000){
     : $('article').first();
   if(!node.length)throw Error('Article content container not found; no inferred content returned');
   node.find('script,style,noscript,form,nav,iframe,svg,.sharedaddy,.yarpp-related,.related-posts,.rank-math-breadcrumb').remove();
-  const textContent=node.text().replace(/\\s+/g,' ').trim();
+  const textContent=node.text().replace(/\s+/g,' ').trim();
   if(!textContent || textContent.length<80)throw Error('No meaningful public article text found');
-  const title=$('h1').first().text().replace(/\\s+/g,' ').trim() || $('title').first().text().trim();
+  const title=$('h1').first().text().replace(/\s+/g,' ').trim() || $('title').first().text().trim();
   const canonical=$('link[rel="canonical"]').first().attr('href')||null;
-  const words=textContent.match(/[\\p{L}\\p{N}]+(?:['’][\\p{L}\\p{N}]+)*/gu)||[];
+  const words=textContent.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)||[];
   return {url,title,canonical,wordCount:words.length,returnedCharacters:Math.min(maxChars,textContent.length),totalCharacters:textContent.length,truncated:textContent.length>maxChars,contentText:textContent.slice(0,maxChars),verifiedAt:new Date().toISOString(),source:'public_html'};
 }
 function serverFactory(){
