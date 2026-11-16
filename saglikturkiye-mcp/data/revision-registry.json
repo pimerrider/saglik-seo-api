@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "1.0",
+  "site": "https://saglikliturkiye.net/",
+  "purpose": "Persistent editorial audit and revision ledger; only verified events may be appended.",
+  "lastUpdated": "2026-11-16",
+  "records": [],
+  "recordSchema": {
+    "canonicalUrl": "string",
+    "wordpressPostId": "integer|null",
+    "title": "string",
+    "firstPublishedAt": "ISO date|null",
+    "lastModifiedAt": "ISO date|null",
+    "lastAuditedAt": "ISO date|null",
+    "lastRevisedAt": "ISO date|null",
+    "status": "NOT_AUDITED|KEEP|REVISION_PENDING|REVISED|REVIEW_REQUIRED",
+    "decisionReason": "string",
+    "changes": "array of strings",
+    "evidence": "array of source links",
+    "editor": "string",
+    "qcStatus": "not_started|in_review|approved|rejected",
+    "history": "array of {at,action,notes,evidence}"
+  }
+}
