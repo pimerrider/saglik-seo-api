@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
+import * as cheerio from 'cheerio';
 
 // This is an independent, read-only service for saglikliturkiye.net.
 // Never import TurkishDishes bridge files or write to WordPress / upstream APIs.
@@ -51,33 +52,41 @@ async function fetchText(url, accept='text/html') {
 const sitemapCache={value:null,at:0};
 function xmlLocs(xml) { return [...xml.matchAll(/<loc(?:\s[^>]*)?>([^<]+)<\/loc>/gi)].map(m=>m[1].trim().replaceAll('&amp;','&')); }
 async function siteMap(limit=MAX_URLS) {
-  if(sitemapCache.value && Date.now()-sitemapCache.at < 600000) return {...sitemapCache.value, urls:sitemapCache.value.urls.slice(0,limit),count:Math.min(limit,sitemapCache.value.urls.length),cacheStatus:'fresh_cache'};
-  let source='direct_site_xml', urls=[],warning=null;
-  try {
-    const r=await fetch(API+'/sitemap-urls',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sitemapUrl:SITE+'sitemap_index.xml',maxUrls:MAX_URLS}),signal:AbortSignal.timeout(25000)});
-    if(!r.ok) throw Error('Main SEO API HTTP '+r.status);
-    const data=await r.json();
-    if(!Array.isArray(data.urls)) throw Error('Unexpected SEO API response');
-    urls=[...new Set(data.urls.map(x=>x.url).filter(x=>{try{return !!permitted(x)}catch{return false}}))];
-    if(!urls.length) throw Error('SEO API returned no URLs');
-    source='main_seo_api';
-  } catch(e) {
-    warning='Main SEO API unavailable: '+String(e.message).slice(0,120);
-    const queue=[SITE+'sitemap_index.xml',SITE+'post-sitemap1.xml',SITE+'post-sitemap2.xml',SITE+'wp-sitemap.xml']; const visited=new Set(), found=new Set();
-    while(queue.length && visited.size<MAX_XML_DOCS && found.size<MAX_URLS) {
-      const url=queue.shift(); if(visited.has(url)) continue; visited.add(url);
-      let xml; try {xml=await fetchText(url,'application/xml,text/xml')} catch {continue}
-      const isIndex=/<(?:\w+:)?sitemapindex\b/i.test(xml);
-      if(!isIndex && !/<(?:\w+:)?urlset\b/i.test(xml)) continue;
-      for(const loc of xmlLocs(xml)) {
-        let valid; try {valid=permitted(loc)} catch {continue}
-        if(isIndex) {if(valid.toLowerCase().endsWith('.xml')&&!visited.has(valid)) queue.push(valid)}
-        else {found.add(valid);if(found.size>=MAX_URLS)break}
+  if (sitemapCache.value && Date.now()-sitemapCache.at < 600000)
+    return {...sitemapCache.value,urls:sitemapCache.value.urls.slice(0,limit),count:Math.min(limit,sitemapCache.value.urls.length),cacheStatus:'fresh_cache'};
+  // Rank Math is the primary source. Do not call the rate-limited upstream first.
+  const queue=[SITE+'sitemap_index.xml',SITE+'post-sitemap1.xml',SITE+'post-sitemap2.xml'];
+  const visited=new Set(),found=new Set();
+  while(queue.length && visited.size<MAX_XML_DOCS && found.size<MAX_URLS) {
+    const url=queue.shift();
+    if(visited.has(url))continue;
+    visited.add(url);
+    let xml;
+    try{xml=await fetchText(url,'application/xml,text/xml')}catch{continue}
+    const isIndex=/<(?:\\w+:)?sitemapindex\\b/i.test(xml);
+    if(!isIndex && !/<(?:\\w+:)?urlset\\b/i.test(xml))continue;
+    for(const loc of xmlLocs(xml)){
+      let valid;try{valid=permitted(loc)}catch{continue}
+      if(isIndex){
+        if(valid.toLowerCase().endsWith('.xml')&&!visited.has(valid))queue.push(valid);
+      }else{
+        found.add(valid);
+        if(found.size>=MAX_URLS)break;
       }
     }
-    urls=[...found];
-    if(!urls.length) throw Error('Unable to verify live health-site sitemap. '+warning);
   }
+  let urls=[...found],source='direct_site_xml',warning=null;
+  if(!urls.length){
+    try {
+      const r=await fetch(API+'/sitemap-urls',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sitemapUrl:SITE+'sitemap_index.xml',maxUrls:MAX_URLS}),signal:AbortSignal.timeout(12000)});
+      if(!r.ok)throw Error('Main SEO API HTTP '+r.status);
+      const data=await r.json();
+      if(!Array.isArray(data.urls))throw Error('Unexpected API response');
+      urls=[...new Set(data.urls.map(x=>x.url).filter(x=>{try{return !!permitted(x)}catch{return false}}))];
+      source='main_seo_api';
+    }catch(e){warning=String(e.message).slice(0,160)}
+  }
+  if(!urls.length)throw Error('Live health-site sitemap could not be verified. '+(warning||'XML unavailable'));
   sitemapCache.value={sitemapUrl:SITE+'sitemap_index.xml',domain:'saglikliturkiye.net',count:urls.length,urls:urls.map(url=>({url})),verificationSource:source,verifiedAt:new Date().toISOString(),warning};
   sitemapCache.at=Date.now();
   return {...sitemapCache.value,urls:sitemapCache.value.urls.slice(0,limit),count:Math.min(limit,urls.length),cacheStatus:'live'};
@@ -91,11 +100,29 @@ async function inspect(url) {
   const h1=html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i)?.[1]?.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim()||null;
   return {url,title,h1,canonical,verifiedAt:new Date().toISOString()};
 }
+// Read public page body only. No wp-admin credentials or WordPress write access.
+async function readArticle(url,maxChars=80000){
+  url=permitted(url);
+  const html=await fetchText(url);
+  const $=cheerio.load(html);
+  const node=$('.entry-content').first().length ? $('.entry-content').first()
+    : $('.wp-block-post-content').first().length ? $('.wp-block-post-content').first()
+    : $('article').first();
+  if(!node.length)throw Error('Article content container not found; no inferred content returned');
+  node.find('script,style,noscript,form,nav,iframe,svg,.sharedaddy,.yarpp-related,.related-posts,.rank-math-breadcrumb').remove();
+  const textContent=node.text().replace(/\\s+/g,' ').trim();
+  if(!textContent || textContent.length<80)throw Error('No meaningful public article text found');
+  const title=$('h1').first().text().replace(/\\s+/g,' ').trim() || $('title').first().text().trim();
+  const canonical=$('link[rel="canonical"]').first().attr('href')||null;
+  const words=textContent.match(/[\\p{L}\\p{N}]+(?:['’][\\p{L}\\p{N}]+)*/gu)||[];
+  return {url,title,canonical,wordCount:words.length,returnedCharacters:Math.min(maxChars,textContent.length),totalCharacters:textContent.length,truncated:textContent.length>maxChars,contentText:textContent.slice(0,maxChars),verifiedAt:new Date().toISOString(),source:'public_html'};
+}
 function serverFactory(){
  const m=new McpServer({name:'saglikturkiye-seo',version:'1.0.0'});
  const add=(name,desc,schema,fn)=>m.tool(name,desc,schema,async a=>{try{return {content:[{type:'text',text:JSON.stringify(await fn(a))}]}}catch(e){return {isError:true,content:[{type:'text',text:String(e.message||e)}]}}});
  add('get_sitemap_urls','Retrieve VERIFIED saglikliturkiye.net sitemap URLs. Read-only.',{maxUrls:z.number().int().min(1).max(MAX_URLS).optional()},a=>siteMap(a.maxUrls||MAX_URLS));
  add('verify_page','Fetch the real health-site HTML and verify its title, H1 and canonical. Read-only.',{url:z.string().url()},a=>inspect(a.url));
+ add('read_article','Read published health article body text from live public HTML. Read-only; no WordPress credentials.',{url:z.string().url(),maxChars:z.number().int().min(2000).max(100000).optional()},a=>readArticle(a.url,a.maxChars||80000));
  add('suggest_internal_links','Suggest candidate links from live sitemap, verify actual HTML title for each. Editorial relevance must still be checked.',{topic:z.string().min(2).max(200),currentUrl:z.string().url().optional(),limit:z.number().int().min(1).max(10).optional()},async a=>{
   const sm=await siteMap(); const q=clean(a.topic).split(/\s+/).filter(x=>x.length>2);
   const candidates=sm.urls.filter(x=>!a.currentUrl||x.url.replace(/\/$/,'')!==permitted(a.currentUrl).replace(/\/$/,''))
