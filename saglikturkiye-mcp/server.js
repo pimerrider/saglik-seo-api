@@ -117,12 +117,56 @@ async function readArticle(url,maxChars=80000){
   const words=textContent.match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)||[];
   return {url,title,canonical,wordCount:words.length,returnedCharacters:Math.min(maxChars,textContent.length),totalCharacters:textContent.length,truncated:textContent.length>maxChars,contentText:textContent.slice(0,maxChars),verifiedAt:new Date().toISOString(),source:'public_html'};
 }
+// Read-only Google reporting via existing SEO API. No tokens or service-account keys exposed.
+async function googleReport(endpoint,body) {
+  const allowed=new Set(['/gsc-data','/gsc-pages','/ga4-pages','/ga4-traffic']);
+  if(!allowed.has(endpoint))throw Error('Reporting endpoint not allowed');
+  let r;
+  try {
+    r=await fetch(API+endpoint,{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify(body),signal:AbortSignal.timeout(20000)});
+  } catch(e){throw Error('Upstream SEO API unreachable: '+String(e.message).slice(0,120))}
+  if(!r.ok){
+    // Never expose upstream credentials or raw server error bodies.
+    throw Error('Upstream SEO API HTTP '+r.status+' ('+endpoint+')');
+  }
+  const d=await r.json();
+  if(!Array.isArray(d.rows))throw Error('Expected rows missing in reporting response');
+  return {source:'existing_seo_api',site:'saglikliturkiye.net',endpoint,
+    count:d.count ?? d.rows.length,rows:d.rows.slice(0,50),
+    returnedRows:Math.min(d.rows.length,50),
+    period:{startDate:body.startDate,endDate:body.endDate},
+    note:'Search Console metrics can lag; GA4 metrics require a separately authorized GA4 property.'};
+}
 function serverFactory(){
  const m=new McpServer({name:'saglikturkiye-seo',version:'1.0.0'});
  const add=(name,desc,schema,fn)=>m.tool(name,desc,schema,async a=>{try{return {content:[{type:'text',text:JSON.stringify(await fn(a))}]}}catch(e){return {isError:true,content:[{type:'text',text:String(e.message||e)}]}}});
  add('get_sitemap_urls','Retrieve VERIFIED saglikliturkiye.net sitemap URLs. Read-only.',{maxUrls:z.number().int().min(1).max(MAX_URLS).optional()},a=>siteMap(a.maxUrls||MAX_URLS));
  add('verify_page','Fetch the real health-site HTML and verify its title, H1 and canonical. Read-only.',{url:z.string().url()},a=>inspect(a.url));
  add('read_article','Read published health article body text from live public HTML. Read-only; no WordPress credentials.',{url:z.string().url(),maxChars:z.number().int().min(2000).max(100000).optional()},a=>readArticle(a.url,a.maxChars||80000));
+ add('gsc_report','Read real Search Console queries or pages for saglikliturkiye.net via authorized existing SEO API. No write access.',{
+  startDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  endDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  view:z.enum(['queries','pages']).optional(),
+  property:z.enum(['url_prefix','domain']).optional()
+ },async a=>{
+  if(a.startDate>a.endDate)throw Error('startDate must not exceed endDate');
+  const siteUrl=a.property==='domain'?'sc-domain:saglikliturkiye.net':SITE;
+  return googleReport(a.view==='pages'?'/gsc-pages':'/gsc-data',{
+    siteUrl,startDate:a.startDate,endDate:a.endDate,rowLimit:50,
+    ...(a.view==='pages'?{}:{dimensions:['query']})
+  });
+ });
+ add('ga4_report','Read GA4 page-level or traffic reports from the existing SEO API. GA4 numeric property ID is required. Read-only.',{
+  propertyId:z.string().regex(/^\\d{5,20}$/),startDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  endDate:z.string().regex(/^\\d{4}-\\d{2}-\\d{2}$/),
+  view:z.enum(['pages','traffic']).optional()
+ },async a=>{
+  if(a.startDate>a.endDate)throw Error('startDate must not exceed endDate');
+  return googleReport(a.view==='traffic'?'/ga4-traffic':'/ga4-pages',{
+    propertyId:a.propertyId,startDate:a.startDate,endDate:a.endDate,rowLimit:50
+  });
+ });
  add('suggest_internal_links','Suggest candidate links from live sitemap, verify actual HTML title for each. Editorial relevance must still be checked.',{topic:z.string().min(2).max(200),currentUrl:z.string().url().optional(),limit:z.number().int().min(1).max(10).optional()},async a=>{
   const sm=await siteMap(); const q=clean(a.topic).split(/\s+/).filter(x=>x.length>2);
   const candidates=sm.urls.filter(x=>!a.currentUrl||x.url.replace(/\/$/,'')!==permitted(a.currentUrl).replace(/\/$/,''))
